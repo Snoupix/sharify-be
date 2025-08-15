@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package room;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+import "role.proto";
+
+message Room {
+  // UUID
+  bytes id = 1;
+  string name = 2;
+  string password = 3;
+  repeated RoomClient clients = 4;
+  repeated string banned_clients = 5;
+  role.RoleManager role_manager = 6;
+  repeated RoomTrack tracks_queue = 7;
+  uint32 max_clients = 8;
+}
+
+message CredentialsInput {
+  string access_token = 1;
+  string refresh_token = 2;
+  google.protobuf.Duration expires_in = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message SpotifyTokens {
+  string access_token = 1;
+  string refresh_token = 2;
+  google.protobuf.Duration expires_in = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message RoomTrack {
+  string client_id = 1;
+  string track_id = 2;
+  string track_name = 3;
+  uint32 track_duration = 4;
+}
+
+message RoomClient {
+  string id = 1;
+  string username = 2;
+  // UUID
+  bytes role_id = 3;
+  bool is_connected = 4;
+}
+
+message RoomError {
+  string error = 1;
+}

@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package role;
+
+message RolePermission {
+  bool can_use_controls = 1;
+  // Only users below
+  bool can_manage_users = 2;
+  bool can_add_song = 3;
+  // Moderator manager / Admin
+  bool can_add_moderator = 4;
+  // Owner(s)
+  bool can_manage_room = 5;
+}
+
+message Role {
+  // UUID
+  bytes id = 1;
+  string name = 2;
+  RolePermission permissions = 3;
+}
+
+message RoleManager {
+  repeated Role roles = 1;
+}

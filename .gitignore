@@ -1,0 +1,8 @@
+/target
+src/proto/*
+!src/proto/mod.rs
+proto_ts/
+
+.env
+*.vim
+.ignore
