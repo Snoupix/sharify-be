@@ -8,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::proto;
-
 use super::role::{Role, RoleManager};
 use super::spotify::{Spotify, SpotifyTokens, Timestamp};
 use super::utils::decode_user_email;
@@ -697,53 +695,5 @@ impl RoomManager {
 impl Room {
     pub fn to_json(&self) -> Value {
         json!(self)
-    }
-
-    pub fn to_proto(self) -> proto::room::Room {
-        proto::room::Room {
-            id: self.id.to_bytes_le().into(),
-            name: self.name,
-            password: self.password,
-            clients: self
-                .clients
-                .into_iter()
-                .map(|client| proto::room::RoomClient {
-                    id: client.id,
-                    username: client.username,
-                    role_id: client.role_id.to_bytes_le().into(),
-                    is_connected: client.is_connected,
-                })
-                .collect(),
-            banned_clients: self.banned_clients,
-            role_manager: Some(proto::role::RoleManager {
-                roles: self
-                    .role_manager
-                    .into_inner()
-                    .into_iter()
-                    .map(|role| proto::role::Role {
-                        id: role.id.to_bytes_le().into(),
-                        name: role.name,
-                        permissions: Some(proto::role::RolePermission {
-                            can_use_controls: role.permissions.can_use_controls,
-                            can_manage_users: role.permissions.can_manage_users,
-                            can_add_song: role.permissions.can_add_song,
-                            can_add_moderator: role.permissions.can_add_moderator,
-                            can_manage_room: role.permissions.can_manage_room,
-                        }),
-                    })
-                    .collect(),
-            }),
-            tracks_queue: self
-                .tracks_queue
-                .into_iter()
-                .map(|queue| proto::room::RoomTrack {
-                    client_id: queue.client_id,
-                    track_id: queue.track_id,
-                    track_name: queue.track_name,
-                    track_duration: queue.track_duration,
-                })
-                .collect(),
-            max_clients: self.max_clients,
-        }
     }
 }

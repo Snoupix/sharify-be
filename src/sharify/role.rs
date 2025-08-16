@@ -10,6 +10,10 @@ impl RoleManager {
         Self(Vec::new())
     }
 
+    pub(super) fn new_from(roles: Vec<Role>) -> Self {
+        Self(roles)
+    }
+
     pub fn add_role(&mut self, name: String, permissions: RolePermission) -> bool {
         if self.0.iter().any(|role| role.name == name) {
             return false;

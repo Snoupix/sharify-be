@@ -13,6 +13,12 @@ use super::spotify_web_utils::{
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Timestamp(String);
 
+impl Timestamp {
+    pub fn new(t: String) -> Self {
+        Self(t)
+    }
+}
+
 impl From<Timestamp> for i64 {
     fn from(value: Timestamp) -> Self {
         value.0.parse().unwrap()

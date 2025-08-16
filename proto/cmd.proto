@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package cmd;
+
+import "spotify.proto";
+import "room.proto";
+
+message HttpCommand {
+  oneof type {
+    CreateRoom create_room = 1;
+  }
+
+  message CreateRoom {
+    string client_id = 1;
+    string username = 2;
+    string name = 3;
+    Credentials credentials = 4;
+  }
+
+  message Credentials {
+    string access_token = 1;
+    string refresh_token = 2;
+    string expires_in = 3;
+    string created_at = 4;
+  }
+}
+
+message Command {
+  oneof type {
+    string search = 1;
+    room.RoomTrack add_to_queue = 2;
+    uint32 set_volume = 3;
+    // Useless bool value
+    bool play_resume = 4;
+    // Useless bool value
+    bool pause = 5;
+    // Useless bool value
+    bool skip_next = 6;
+    // Useless bool value
+    bool skip_previous = 7;
+    uint64 seek_to_pos = 8;
+    Kick kick = 9;
+    Ban ban = 10;
+    // Useless bool value
+    bool get_room = 11;
+  }
+
+  message Kick {
+    string client_id = 1;
+    string reason = 2;
+  }
+
+  message Ban {
+    string client_id = 1;
+    string reason = 2;
+  }
+}
+
+message CommandResponse {
+  oneof type {
+    // Useless bool value
+    bool unauthorized = 1;
+    room.Room room = 2;
+    spotify.TrackArray spotify_tracks = 3;
+  }
+}

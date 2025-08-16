@@ -8,18 +8,16 @@ mod sharify;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{Arc, Mutex, OnceLock};
 
-use actix::SpawnHandle;
 use actix_cors::Cors;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::middleware;
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
 
-use sharify::room::{RoomID, RoomManager};
+use sharify::room::RoomManager;
 
 use crate::sharify::websocket::{self, SharifyWsManager};
 
@@ -38,6 +36,11 @@ async fn main() -> std::io::Result<()> {
 
     env_logger::init_from_env(env_logger::Env::new().filter_or("LOG", "debug"));
 
+    serve().await
+}
+
+// Needed to be ran in tests
+async fn serve() -> std::io::Result<()> {
     let sharify_ws_manager = Arc::new(RwLock::new(SharifyWsManager::default()));
     let sharify_state = Arc::new(RwLock::new(RoomManager::default()));
 
@@ -62,7 +65,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&sharify_state)))
             .default_service(web::to(HttpResponse::NotFound))
             .service(routes::root)
-            .service(routes::create_room)
+            .service(routes::post_command)
             .service(routes::code_verifier)
             .service(routes::code_challenge)
             .service(

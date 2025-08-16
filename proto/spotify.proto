@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package spotify;
+
+message Track {
+    string track_id = 1;
+    string track_name = 2;
+    string artist_name = 3;
+    int64 track_duration = 4;
+}
+
+message TrackArray {
+    repeated Track tracks = 1;
+}

@@ -1,6 +1,9 @@
 pub mod role;
+pub mod role_proto;
 pub mod room;
+pub mod room_proto;
 pub mod spotify;
 pub mod spotify_web_utils;
 pub mod utils;
 pub mod websocket;
+pub mod websocket_cmds;

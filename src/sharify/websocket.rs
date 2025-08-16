@@ -7,8 +7,12 @@ use std::{
 use actix::clock::interval;
 use actix_web::{web, Error as ActixError, HttpRequest, HttpResponse};
 use actix_ws::{AggregatedMessage, Session};
+use prost::Message as _;
 
+use crate::proto::cmd::Command;
 use crate::sharify::room::{RoomClientID, RoomID, RoomManager};
+use crate::sharify::utils;
+use crate::sharify::websocket_cmds::Command as WSCmd;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() * 2);
@@ -127,9 +131,7 @@ impl SharifyWsInstance {
 
                         drop(guard);
 
-                        _self
-                            .send_in_room(Arc::clone(&ws_manager), clients, string)
-                            .await;
+                        Self::send_in_room(Arc::clone(&ws_manager), clients, string).await;
                     }
                     AggregatedMessage::Close(_) => {
                         break;
@@ -137,7 +139,43 @@ impl SharifyWsInstance {
                     AggregatedMessage::Pong(_) => {
                         *hb.lock().unwrap() = Instant::now();
                     }
-                    AggregatedMessage::Binary(bytes) => {}
+                    AggregatedMessage::Binary(bytes) => {
+                        let Ok(command) = Command::decode(bytes) else {
+                            debug!(
+                                "Unrecognized command from client: {}",
+                                utils::decode_user_email(&client_id)
+                            );
+                            continue;
+                        };
+                        let Some(cmd_type) = command.r#type else {
+                            continue;
+                        };
+
+                        let mut ws_guard = ws_manager.write().unwrap();
+                        let Some(SharifyWsInstance { session, .. }) =
+                            ws_guard.ws_sessions.get_mut(&client_id)
+                        else {
+                            continue;
+                        };
+
+                        let mut ws_cmd = WSCmd::new(
+                            Arc::clone(&sharify_state),
+                            Arc::clone(&ws_manager),
+                            client_id.clone(),
+                            room_id,
+                        );
+
+                        let response = ws_cmd.process(cmd_type);
+
+                        let mut buf = Vec::new();
+                        response.encode(&mut buf);
+
+                        if !Self::send_binary(session, &client_id, Arc::clone(&ws_manager), buf)
+                            .await
+                        {
+                            debug!("Failed to send command response to client {client_id}. WS session closed");
+                        }
+                    }
                 };
             }
 
@@ -177,8 +215,37 @@ impl SharifyWsInstance {
         });
     }
 
+    /// Returns false when session is closed and has been removed
+    async fn send_text(
+        session: &mut Session,
+        client_id: &RoomClientID,
+        ws_manager: Arc<RwLock<SharifyWsManager>>,
+        msg: impl Into<String>,
+    ) -> bool {
+        if session.text(msg.into()).await.is_err() {
+            ws_manager.write().unwrap().ws_sessions.remove(client_id);
+            return false;
+        }
+
+        true
+    }
+
+    /// Returns false when session is closed and has been removed
+    async fn send_binary(
+        session: &mut Session,
+        client_id: &RoomClientID,
+        ws_manager: Arc<RwLock<SharifyWsManager>>,
+        buf: impl Into<web::Bytes>,
+    ) -> bool {
+        if session.binary(buf).await.is_err() {
+            ws_manager.write().unwrap().ws_sessions.remove(client_id);
+            return false;
+        }
+
+        true
+    }
+
     async fn send_in_room(
-        &self,
         ws_manager: Arc<RwLock<SharifyWsManager>>,
         clients: Vec<RoomClientID>,
         msg: impl Into<String>,
@@ -199,9 +266,7 @@ impl SharifyWsInstance {
         drop(guard);
 
         for (id, mut session) in iter {
-            if session.text(msg.clone()).await.is_err() {
-                ws_manager.write().unwrap().ws_sessions.remove(&id);
-            }
+            Self::send_text(&mut session, &id, Arc::clone(&ws_manager), msg.clone()).await;
         }
     }
 }
