@@ -1,6 +1,7 @@
 /target
 src/proto/*
 !src/proto/mod.rs
+!src/proto/impl
 proto_ts/
 
 .env

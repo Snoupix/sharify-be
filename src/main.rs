@@ -10,12 +10,12 @@ mod tests;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use actix_cors::Cors;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::middleware;
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
+use tokio::sync::RwLock;
 
 use sharify::room::RoomManager;
 

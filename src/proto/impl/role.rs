@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
-use super::role;
 use crate::proto;
+use crate::sharify::role;
 
 impl From<proto::role::RolePermission> for role::RolePermission {
     fn from(perm: proto::role::RolePermission) -> Self {

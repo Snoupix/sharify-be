@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use tokio::sync::RwLock;
 
 use crate::proto::cmd::command;
 use crate::proto::cmd::command_response;
@@ -6,73 +9,74 @@ use crate::proto::room::RoomTrack;
 use crate::sharify::room::RoomManager;
 use crate::sharify::room::{RoomClientID, RoomID};
 use crate::sharify::spotify::Spotify;
-use crate::sharify::websocket::SharifyWsManager;
 
+#[async_trait]
 trait Commands {
+    type T;
     type Output;
 
-    fn search(&self, name: String) -> Self::Output;
-    fn add_to_queue(&self, track: RoomTrack) -> Self::Output;
-    fn set_volume(&self, percentage: u8) -> Self::Output;
-    fn play_resume(&self) -> Self::Output;
-    fn pause(&self) -> Self::Output;
-    fn skip_next(&self) -> Self::Output;
-    fn skip_previous(&self) -> Self::Output;
-    fn seek_to_pos(&self) -> Self::Output;
-    fn kick(&self, opts: command::Kick) -> Self::Output;
-    fn ban(&self, opts: command::Ban) -> Self::Output;
-    fn get_room(&self) -> Self::Output;
+    async fn search(self, name: String) -> Self::Output;
+    async fn add_to_queue(self, track: RoomTrack) -> Self::Output;
+    async fn set_volume(self, percentage: u8) -> Self::Output;
+    async fn play_resume(self) -> Self::Output;
+    async fn pause(self) -> Self::Output;
+    async fn skip_next(self) -> Self::Output;
+    async fn skip_previous(self) -> Self::Output;
+    async fn seek_to_pos(self, pos: u64) -> Self::Output;
+    async fn kick(self, opts: command::Kick) -> Self::Output;
+    async fn ban(self, opts: command::Ban) -> Self::Output;
+    async fn get_room(self) -> Self::Output;
 }
 
 pub struct Command {
     sharify_state: Arc<RwLock<RoomManager>>,
-    ws_manager: Arc<RwLock<SharifyWsManager>>,
-    author_id: RoomClientID,
+    client_id: RoomClientID,
     room_id: RoomID,
 }
 
 impl Command {
     pub fn new(
         sharify_state: Arc<RwLock<RoomManager>>,
-        ws_manager: Arc<RwLock<SharifyWsManager>>,
         author_id: RoomClientID,
         room_id: RoomID,
     ) -> Self {
         Self {
             sharify_state,
-            ws_manager,
-            author_id,
+            client_id: author_id,
             room_id,
         }
     }
 
-    pub fn process(&mut self, cmd_type: command::Type) -> command_response::Type {
-        if !self.has_permission_to(&cmd_type) {
-            return command_response::Type::Unauthorized(false);
+    pub async fn process(
+        self,
+        cmd_type: command::Type,
+    ) -> Result<Option<command_response::Type>, command_response::Type> {
+        if !self.has_permission_to(&cmd_type).await {
+            return Err(command_response::Type::Unauthorized(false));
         }
 
         match cmd_type {
-            command::Type::Search(name) => self.search(name),
-            command::Type::AddToQueue(room_track) => self.add_to_queue(room_track),
-            command::Type::SetVolume(percentage) => self.set_volume(percentage as _),
-            command::Type::PlayResume(_) => self.play_resume(),
-            command::Type::Pause(_) => self.pause(),
-            command::Type::SkipNext(_) => self.skip_next(),
-            command::Type::SkipPrevious(_) => self.skip_previous(),
-            command::Type::SeekToPos(_) => self.seek_to_pos(),
-            command::Type::Kick(opts) => self.kick(opts),
-            command::Type::Ban(opts) => self.ban(opts),
-            command::Type::GetRoom(_) => self.get_room(),
+            command::Type::Search(name) => self.search(name).await,
+            command::Type::AddToQueue(room_track) => self.add_to_queue(room_track).await,
+            command::Type::SetVolume(percentage) => self.set_volume(percentage as _).await,
+            command::Type::PlayResume(_) => self.play_resume().await,
+            command::Type::Pause(_) => self.pause().await,
+            command::Type::SkipNext(_) => self.skip_next().await,
+            command::Type::SkipPrevious(_) => self.skip_previous().await,
+            command::Type::SeekToPos(pos) => self.seek_to_pos(pos).await,
+            command::Type::Kick(opts) => self.kick(opts).await,
+            command::Type::Ban(opts) => self.ban(opts).await,
+            command::Type::GetRoom(_) => self.get_room().await,
         }
     }
 
-    fn has_permission_to(&self, cmd_type: &command::Type) -> bool {
-        let guard = self.sharify_state.read().unwrap();
+    async fn has_permission_to(&self, cmd_type: &command::Type) -> bool {
+        let guard = self.sharify_state.read().await;
         let Some(room) = guard.get_room(&self.room_id) else {
             return false;
         };
         let Some(client_role_id) = room.clients.iter().find_map(|client| {
-            if client.id == self.author_id {
+            if client.id == self.client_id {
                 Some(client.role_id)
             } else {
                 None
@@ -99,62 +103,131 @@ impl Command {
         }
     }
 
-    fn get_spotify_handler(&self) -> Option<Spotify> {
-        let guard = self.sharify_state.read().unwrap();
-        let room = guard.get_room(&self.room_id)?;
+    async fn get_spotify_handler(&self) -> Result<Spotify, command_response::Type> {
+        let guard = self.sharify_state.read().await;
 
-        Some(room.spotify_handler.clone())
+        let room = guard
+            .get_room(&self.room_id)
+            .ok_or(command_response::Type::GenericError(
+                "Room not found".into(),
+            ))?;
+
+        Ok(room.spotify_handler.clone())
     }
 }
 
+#[async_trait]
 impl Commands for Command {
-    type Output = command_response::Type;
+    type T = command_response::Type;
+    type Output = Result<Option<Self::T>, Self::T>;
 
-    fn search(&self, name: String) -> Self::Output {
-        todo!()
+    async fn search(self, name: String) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        let tracks = spotify
+            .search_track(name)
+            .await
+            .map_err(Self::T::GenericError)?;
+
+        Ok(Some(Self::T::SpotifyTracks(tracks.into())))
     }
 
-    fn add_to_queue(&self, track: RoomTrack) -> Self::Output {
-        todo!()
+    async fn add_to_queue(self, track: RoomTrack) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify
+            .add_track_to_queue(track.track_id)
+            .await
+            .map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn set_volume(&self, percentage: u8) -> Self::Output {
-        todo!()
+    async fn set_volume(self, percentage: u8) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify
+            .set_volume(percentage)
+            .await
+            .map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn play_resume(&self) -> Self::Output {
-        todo!()
+    async fn play_resume(self) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify.play_resume().await.map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn pause(&self) -> Self::Output {
-        todo!()
+    async fn pause(self) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify.pause().await.map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn skip_next(&self) -> Self::Output {
-        todo!()
+    async fn skip_next(self) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify.skip_next().await.map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn skip_previous(&self) -> Self::Output {
-        todo!()
+    async fn skip_previous(self) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify
+            .skip_previous()
+            .await
+            .map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn seek_to_pos(&self) -> Self::Output {
-        todo!()
+    async fn seek_to_pos(self, pos: u64) -> Self::Output {
+        let spotify = self.get_spotify_handler().await?;
+
+        spotify
+            .seek_to_ms(pos)
+            .await
+            .map_err(Self::T::GenericError)?;
+
+        Ok(None)
     }
 
-    fn kick(&self, opts: command::Kick) -> Self::Output {
-        todo!()
+    async fn kick(self, opts: command::Kick) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
+
+        guard
+            .kick_client(self.room_id, &self.client_id, &opts.client_id, opts.reason)
+            .map_err(Into::<Self::T>::into)?;
+
+        Ok(None)
     }
 
-    fn ban(&self, opts: command::Ban) -> Self::Output {
-        todo!()
+    async fn ban(self, opts: command::Ban) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
+
+        guard
+            .ban_client(self.room_id, &self.client_id, &opts.client_id, opts.reason)
+            .map_err(Into::<Self::T>::into)?;
+
+        Ok(None)
     }
 
-    fn get_room(&self) -> Self::Output {
-        let guard = self.sharify_state.read().unwrap();
+    async fn get_room(self) -> Self::Output {
+        let guard = self.sharify_state.read().await;
 
-        let room = guard.get_room(&self.room_id).unwrap().clone();
+        let room = guard
+            .get_room(&self.room_id)
+            .ok_or(Self::T::GenericError("Room not found".into()))?
+            .clone();
 
-        command_response::Type::Room(room.into())
+        Ok(Some(Self::T::Room(room.into())))
     }
 }

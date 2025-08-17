@@ -10,7 +10,7 @@ impl RoleManager {
         Self(Vec::new())
     }
 
-    pub(super) fn new_from(roles: Vec<Role>) -> Self {
+    pub(crate) fn new_from(roles: Vec<Role>) -> Self {
         Self(roles)
     }
 

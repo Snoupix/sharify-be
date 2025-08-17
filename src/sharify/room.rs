@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use actix_web::cookie::time::{ext::InstantExt, Duration};
@@ -13,6 +13,7 @@ use super::spotify::{Spotify, SpotifyTokens, Timestamp};
 use super::utils::decode_user_email;
 
 const MAX_CLIENTS: u32 = 15;
+const MAX_LOGS_LEN: usize = 25;
 pub const INACTIVE_PARTY_MINS: u32 = 5;
 
 // email / uuid allowed chars
@@ -34,10 +35,32 @@ pub struct Room {
     // pub current_device: Option<SpotifyApi.UserDevice>,
     pub tracks_queue: Vec<RoomTrack>,
     pub max_clients: u32,
+    // TODO: Add log on every action
+    /// Last 25 logs: Ban, Kick, Song added... (25 for memory purposes)
+    pub logs: VecDeque<Log>,
     #[serde(skip)]
     pub inactive_for: Option<Instant>,
     #[serde(skip)]
     pub spotify_handler: Spotify,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Log {
+    pub r#type: LogType,
+    pub details: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum LogType {
+    Other,
+    Kick,
+    Ban,
+}
+
+impl Log {
+    pub fn new(r#type: LogType, details: String) -> Self {
+        Self { r#type, details }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -142,6 +165,7 @@ impl RoomManager {
                     .take(0x10)
                     .map(char::from)
                     .collect::<String>(),
+                logs: VecDeque::with_capacity(MAX_LOGS_LEN),
                 banned_clients: Vec::new(),
                 tracks_queue: Vec::new(),
                 max_clients: MAX_CLIENTS,
@@ -362,66 +386,99 @@ impl RoomManager {
         Err(RoomError::new("Track not found in the queue".into()))
     }
 
-    // FIXME handle perms
-    // pub fn kick_user(&mut self, id: RoomID, client_id: RoomClientID) -> Result<(), RoomError> {
-    //     let room = self.active_rooms.get_mut(&id);
-    //
-    //     if room.is_none() {
-    //         error!("Cannot find room id: {id}");
-    //
-    //         return Err(RoomError::new("Cannot find room".into()));
-    //     }
-    //
-    //     let room = room.unwrap();
-    //     let clients = room.clients.clone();
-    //     let Some(client) = clients.iter().find(|c| c.id == client_id) else {
-    //         error!("Unexpected error: Attempt to kick a user id {client_id} that's not in the room id {id}");
-    //
-    //         return Err(RoomError::new(
-    //             "Tried to kick a user that's not in the room (anymore)".into(),
-    //         ));
-    //     };
-    //
-    //     room.clients.retain(|c| c.id != client_id);
-    //
-    //     self.users.remove(&client.id);
-    //
-    //     println!("Kicked {} from room {} {id}", client.username, room.name);
-    //
-    //     Ok(())
-    // }
+    pub fn kick_client(
+        &mut self,
+        room_id: RoomID,
+        author_id: &RoomClientID,
+        client_id: &RoomClientID,
+        reason: String,
+    ) -> Result<(), RoomError> {
+        let Some(room) = self.active_rooms.get_mut(&room_id) else {
+            error!("Cannot find room id: {room_id}");
 
-    // FIXME handle perms
-    // pub fn ban_user(&mut self, id: RoomID, client_id: RoomClientID) -> Result<(), RoomError> {
-    //     let room = self.active_rooms.get_mut(&id);
-    //
-    //     if room.is_none() {
-    //         println!("Cannot find room id: {id}");
-    //
-    //         return Err(RoomError::new("Cannot find room".into()));
-    //     }
-    //
-    //     let room = room.unwrap();
-    //     let client = room.clients.iter().find(|&c| c.id == client_id);
-    //
-    //     if client.is_none() {
-    //         error!("Unexpected error: Attempt to ban a user id {client_id} that's not in the room id {id}");
-    //
-    //         return Err(RoomError::new(
-    //             "Attempt to ban a user that's not in the room".into(),
-    //         ));
-    //     }
-    //
-    //     let client = client.unwrap();
-    //
-    //     room.banned_clients.push(client_id.clone());
-    //
-    //     debug!("Banned {} from room {} {id}", client.username, room.name);
-    //
-    //     self.kick_user(id, client_id);
-    //
-    //     Ok(())
-    // }
+            return Err(RoomError::new("Cannot find room".into()));
+        };
+
+        let Some(author) = room.clients.iter().find(|c| c.id == *author_id).cloned() else {
+            error!("Unexpected error: Kick attempt from author id {author_id} that's not in the room id {room_id}");
+
+            return Err(RoomError::new(
+                "Kick author is not in the room (anymore)".into(),
+            ));
+        };
+        let Some(client) = room.clients.iter().find(|c| c.id == *client_id).cloned() else {
+            error!("Unexpected error: Attempt to kick a client id {client_id} that's not in the room id {room_id}");
+
+            return Err(RoomError::new(
+                "Tried to kick a user that's not in the room (anymore)".into(),
+            ));
+        };
+
+        room.clients.retain(|c| c.id != *client_id);
+
+        self.client_ids.remove(&client.id);
+
+        self.append_log(
+            room_id,
+            Log::new(
+                LogType::Kick,
+                format!(
+                    "Client {} kicked {} from the room for: {}",
+                    author.username, client.username, reason
+                ),
+            ),
+        )?;
+
+        Ok(())
+    }
+
+    pub fn ban_client(
+        &mut self,
+        room_id: RoomID,
+        author_id: &RoomClientID,
+        client_id: &RoomClientID,
+        reason: String,
+    ) -> Result<(), RoomError> {
+        let Some(room) = self.active_rooms.get_mut(&room_id) else {
+            error!("Cannot find room id: {room_id}");
+
+            return Err(RoomError::new("Cannot find room".into()));
+        };
+
+        let Some(author) = room.clients.iter().find(|c| c.id == *author_id).cloned() else {
+            error!("Unexpected error: Ban attempt from author id {author_id} that's not in the room id {room_id}");
+
+            return Err(RoomError::new(
+                "Ban author is not in the room (anymore)".into(),
+            ));
+        };
+        let Some(client) = room.clients.iter().find(|c| c.id == *client_id).cloned() else {
+            error!("Unexpected error: Attempt to ban a client id {client_id} that's not in the room id {room_id}");
+
+            return Err(RoomError::new(
+                "Tried to ban a user that's not in the room (anymore)".into(),
+            ));
+        };
+
+        room.clients.retain(|c| c.id != *client_id);
+
+        self.client_ids.remove(&client.id);
+
+        room.banned_clients.push(client_id.clone());
+
+        self.append_log(
+            room_id,
+            Log::new(
+                LogType::Ban,
+                format!(
+                    "Client {} banned {} from the room for: {}",
+                    author.username, client.username, reason
+                ),
+            ),
+        )?;
+
+        Ok(())
+    }
 
     pub fn join_room(
         &mut self,
@@ -689,6 +746,20 @@ impl RoomManager {
 
     pub fn client_id_exists(&self, client_id: &RoomClientID) -> bool {
         self.client_ids.contains(client_id)
+    }
+
+    pub fn append_log(&mut self, room_id: RoomID, log: Log) -> Result<(), RoomError> {
+        let room = self
+            .get_room_mut(&room_id)
+            .ok_or(RoomError::new(format!("Room ID {room_id} not found")))?;
+
+        if room.logs.len() >= MAX_LOGS_LEN {
+            room.logs.pop_front();
+        }
+
+        room.logs.push_back(log);
+
+        Ok(())
     }
 }
 

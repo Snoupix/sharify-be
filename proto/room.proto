@@ -16,7 +16,8 @@ message Room {
   repeated string banned_clients = 5;
   role.RoleManager role_manager = 6;
   repeated RoomTrack tracks_queue = 7;
-  uint32 max_clients = 8;
+  repeated Log logs = 8;
+  uint32 max_clients = 9;
 }
 
 message CredentialsInput {
@@ -50,4 +51,15 @@ message RoomClient {
 
 message RoomError {
   string error = 1;
+}
+
+message Log {
+  LogType type = 1;
+  string details = 2;
+}
+
+enum LogType {
+  OTHER = 0;
+  KICK = 1;
+  BAN = 2;
 }

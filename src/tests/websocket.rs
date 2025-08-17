@@ -31,7 +31,11 @@ async fn run_server_with_timeout(seconds: u64, mut cancel_rx: mpsc::Receiver<()>
     });
 
     // Await for server start
-    for _ in 0..3 {
+    for i in 0..4 {
+        if i == 3 {
+            panic!("Server unreachable");
+        }
+
         if Client::default()
             .get(BASE_URL)
             .timeout(Duration::from_millis(1000))

@@ -9,4 +9,4 @@
 
 @clean:
     cargo clean
-    find src/proto -type f -name '*.rs' ! -name 'mod.rs' -exec rm {} \+
+    find src/proto -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' -exec rm {} \+

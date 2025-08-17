@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -8,8 +8,9 @@ use actix::clock::interval;
 use actix_web::{web, Error as ActixError, HttpRequest, HttpResponse};
 use actix_ws::{AggregatedMessage, Session};
 use prost::Message as _;
+use tokio::sync::{Mutex, RwLock};
 
-use crate::proto::cmd::Command;
+use crate::proto::cmd::{command, command_response, Command};
 use crate::sharify::room::{RoomClientID, RoomID, RoomManager};
 use crate::sharify::utils;
 use crate::sharify::websocket_cmds::Command as WSCmd;
@@ -58,7 +59,7 @@ impl SharifyWsInstance {
         path: web::Path<(RoomID, RoomClientID)>,
     ) -> Result<HttpResponse, ActixError> {
         let (room_id, client_id) = path.into_inner();
-        let state_guard = sharify_state.read().unwrap();
+        let state_guard = sharify_state.read().await;
         let room = state_guard
             .get_room(&room_id)
             .ok_or(actix_web::error::ErrorBadRequest(format!(
@@ -76,7 +77,7 @@ impl SharifyWsInstance {
 
         if let Some(Self { session, .. }) = sharify_ws_manager
             .write()
-            .unwrap()
+            .await
             .ws_sessions
             .remove(&client_id)
         {
@@ -85,7 +86,7 @@ impl SharifyWsInstance {
 
         drop(state_guard);
 
-        let mut sharify_guard = sharify_state.write().unwrap();
+        let mut sharify_guard = sharify_state.write().await;
         if let Err(e) = sharify_guard.set_ws_client_state(room_id, &client_id, true) {
             return Err(actix_web::error::ErrorBadRequest(format!("WS Error: {e}")));
         }
@@ -103,7 +104,7 @@ impl SharifyWsInstance {
 
         sharify_ws_manager
             .write()
-            .unwrap()
+            .await
             .ws_sessions
             .insert(client_id.clone(), _self.clone());
 
@@ -112,6 +113,8 @@ impl SharifyWsInstance {
         let hb = Arc::clone(&_self.hb);
         let sharify_state = Arc::clone(&sharify_state);
         let ws_manager = Arc::clone(&sharify_ws_manager);
+
+        // TODO: Send Room state thread loop
 
         actix_web::rt::spawn(async move {
             while let Some(Ok(msg)) = stream.recv().await {
@@ -123,7 +126,7 @@ impl SharifyWsInstance {
                     }
                     AggregatedMessage::Text(string) => {
                         info!("Relaying text, {string}");
-                        let guard = sharify_state.read().unwrap();
+                        let guard = sharify_state.read().await;
                         let Some(room) = guard.get_room(&room_id) else {
                             continue;
                         };
@@ -137,7 +140,7 @@ impl SharifyWsInstance {
                         break;
                     }
                     AggregatedMessage::Pong(_) => {
-                        *hb.lock().unwrap() = Instant::now();
+                        *hb.lock().await = Instant::now();
                     }
                     AggregatedMessage::Binary(bytes) => {
                         let Ok(command) = Command::decode(bytes) else {
@@ -151,36 +154,75 @@ impl SharifyWsInstance {
                             continue;
                         };
 
-                        let mut ws_guard = ws_manager.write().unwrap();
+                        let mut ws_guard = ws_manager.write().await;
                         let Some(SharifyWsInstance { session, .. }) =
                             ws_guard.ws_sessions.get_mut(&client_id)
                         else {
                             continue;
                         };
 
-                        let mut ws_cmd = WSCmd::new(
-                            Arc::clone(&sharify_state),
-                            Arc::clone(&ws_manager),
-                            client_id.clone(),
-                            room_id,
-                        );
+                        let ws_cmd =
+                            WSCmd::new(Arc::clone(&sharify_state), client_id.clone(), room_id);
 
-                        let response = ws_cmd.process(cmd_type);
+                        match ws_cmd.process(cmd_type.clone()).await {
+                            // Ignore the Result until I might need to do smth differently based on it
+                            Ok(Some(response)) | Err(response) => {
+                                let mut buf = Vec::new();
+                                response.encode(&mut buf);
 
-                        let mut buf = Vec::new();
-                        response.encode(&mut buf);
+                                if !Self::send_binary(
+                                    session,
+                                    &client_id,
+                                    Arc::clone(&ws_manager),
+                                    buf,
+                                )
+                                .await
+                                {
+                                    debug!("Failed to send command response to client {client_id}. WS session closed");
+                                }
+                            }
+                            Ok(None) => {
+                                let is_ban = matches!(cmd_type, command::Type::Ban(_));
 
-                        if !Self::send_binary(session, &client_id, Arc::clone(&ws_manager), buf)
-                            .await
-                        {
-                            debug!("Failed to send command response to client {client_id}. WS session closed");
+                                match cmd_type {
+                                    command::Type::Kick(command::Kick { reason, .. })
+                                    | command::Type::Ban(command::Ban { reason, .. }) => {
+                                        if let Some(mut instance) =
+                                            ws_guard.ws_sessions.remove(&client_id)
+                                        {
+                                            let mut buf = Vec::new();
+
+                                            let cmd = if is_ban {
+                                                command_response::Type::Ban(command_response::Ban {
+                                                    reason,
+                                                })
+                                            } else {
+                                                command_response::Type::Kick(
+                                                    command_response::Kick { reason },
+                                                )
+                                            };
+
+                                            cmd.encode(&mut buf);
+
+                                            let _ = SharifyWsInstance::send_binary(
+                                                &mut instance.session,
+                                                &client_id,
+                                                Arc::clone(&ws_manager),
+                                                buf,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                 };
             }
 
             // TODO: Remove from Room
-            ws_manager.write().unwrap().ws_sessions.remove(&client_id);
+            ws_manager.write().await.ws_sessions.remove(&client_id);
             let _ = session.close(None).await;
         });
 
@@ -197,13 +239,13 @@ impl SharifyWsInstance {
             loop {
                 interval.tick().await;
 
-                if Instant::now().duration_since(*hb.lock().unwrap()) > CLIENT_TIMEOUT {
+                if Instant::now().duration_since(*hb.lock().await) > CLIENT_TIMEOUT {
                     debug!(
                         "[id:{}, room_id:{}] Disconnecting failed heartbeat",
                         client_id, room_id
                     );
                     // TODO: Remove from Room
-                    ws_manager.write().unwrap().ws_sessions.remove(&client_id);
+                    ws_manager.write().await.ws_sessions.remove(&client_id);
                     let _ = session.close(None).await;
                     break;
                 }
@@ -223,7 +265,7 @@ impl SharifyWsInstance {
         msg: impl Into<String>,
     ) -> bool {
         if session.text(msg.into()).await.is_err() {
-            ws_manager.write().unwrap().ws_sessions.remove(client_id);
+            ws_manager.write().await.ws_sessions.remove(client_id);
             return false;
         }
 
@@ -238,7 +280,7 @@ impl SharifyWsInstance {
         buf: impl Into<web::Bytes>,
     ) -> bool {
         if session.binary(buf).await.is_err() {
-            ws_manager.write().unwrap().ws_sessions.remove(client_id);
+            ws_manager.write().await.ws_sessions.remove(client_id);
             return false;
         }
 
@@ -251,7 +293,7 @@ impl SharifyWsInstance {
         msg: impl Into<String>,
     ) {
         let msg = msg.into();
-        let guard = ws_manager.read().unwrap();
+        let guard = ws_manager.read().await;
         let iter = guard
             .ws_sessions
             .iter()

@@ -1,8 +1,9 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use actix_web::web;
 use actix_web::{get, post, HttpResponse, Responder};
 use prost::Message as _;
+use tokio::sync::RwLock;
 
 use crate::proto::cmd::{command_response, http_command, CommandResponse, HttpCommand};
 use crate::sharify;
@@ -37,7 +38,7 @@ pub async fn post_command(
             name,
             credentials: Some(credentials),
         }) => {
-            let mut state_guard = sharify_state.write().unwrap();
+            let mut state_guard = sharify_state.write().await;
             let room = match state_guard.create_room(
                 client_id,
                 username,

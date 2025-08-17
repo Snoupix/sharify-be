@@ -1,5 +1,3 @@
-pub mod cmd;
-pub mod r#impl;
 pub mod role;
 pub mod room;
 pub mod spotify;

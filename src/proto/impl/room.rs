@@ -1,12 +1,96 @@
-// Room to/from proto impl
-
 use std::time::Instant;
 
 use uuid::Uuid;
 
-use super::room;
 use crate::proto;
+use crate::proto::cmd::command_response;
+use crate::sharify::room;
 use crate::sharify::spotify::Spotify;
+
+impl From<room::LogType> for i32 {
+    fn from(log: room::LogType) -> Self {
+        match log {
+            room::LogType::Other => 0,
+            room::LogType::Kick => 1,
+            room::LogType::Ban => 2,
+        }
+    }
+}
+
+impl From<i32> for room::LogType {
+    fn from(log: i32) -> Self {
+        match log {
+            0 => Self::Other,
+            1 => Self::Kick,
+            2 => Self::Ban,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<proto::room::Log> for room::Log {
+    fn from(log: proto::room::Log) -> Self {
+        Self {
+            r#type: log.r#type.into(),
+            details: log.details,
+        }
+    }
+}
+
+impl From<room::Log> for proto::room::Log {
+    fn from(log: room::Log) -> Self {
+        Self {
+            r#type: log.r#type.into(),
+            details: log.details,
+        }
+    }
+}
+
+impl From<proto::cmd::command_response::Type> for room::RoomError {
+    fn from(err: proto::cmd::command_response::Type) -> Self {
+        let command_response::Type::GenericError(error) = err else {
+            unreachable!();
+        };
+
+        Self { error }
+    }
+}
+
+impl From<room::RoomError> for proto::cmd::command_response::Type {
+    fn from(err: room::RoomError) -> Self {
+        Self::GenericError(err.error)
+    }
+}
+
+impl From<proto::cmd::CommandResponse> for room::RoomError {
+    fn from(err: proto::cmd::CommandResponse) -> Self {
+        let Some(proto::cmd::command_response::Type::GenericError(error)) = err.r#type else {
+            unreachable!();
+        };
+
+        Self { error }
+    }
+}
+
+impl From<room::RoomError> for proto::cmd::CommandResponse {
+    fn from(err: room::RoomError) -> Self {
+        Self {
+            r#type: Some(err.into()),
+        }
+    }
+}
+
+impl From<proto::room::RoomError> for room::RoomError {
+    fn from(err: proto::room::RoomError) -> Self {
+        Self { error: err.error }
+    }
+}
+
+impl From<room::RoomError> for proto::room::RoomError {
+    fn from(err: room::RoomError) -> Self {
+        Self { error: err.error }
+    }
+}
 
 impl From<proto::room::RoomTrack> for room::RoomTrack {
     fn from(track: proto::room::RoomTrack) -> Self {
@@ -63,6 +147,7 @@ impl From<proto::room::Room> for room::Room {
             banned_clients: room.banned_clients,
             role_manager: room.role_manager.map(Into::into).unwrap_or_default(),
             tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
+            logs: room.logs.into_iter().map(Into::into).collect(),
             max_clients: room.max_clients,
             inactive_for: None,
             spotify_handler: Spotify::default(),
@@ -80,6 +165,7 @@ impl From<room::Room> for proto::room::Room {
             banned_clients: room.banned_clients,
             role_manager: Some(room.role_manager.into()),
             tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
+            logs: room.logs.into_iter().map(Into::into).collect(),
             max_clients: room.max_clients,
         }
     }

@@ -62,5 +62,16 @@ message CommandResponse {
     bool unauthorized = 1;
     room.Room room = 2;
     spotify.TrackArray spotify_tracks = 3;
+    string generic_error = 4;
+    Kick kick = 5;
+    Ban ban = 6;
+  }
+
+  message Kick {
+    string reason = 1;
+  }
+
+  message Ban {
+    string reason = 1;
   }
 }
