@@ -40,7 +40,7 @@ pub struct SpotifyPlaylist {
     pub tracks: Vec<SpotifyTrack>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SpotifyCurrentPlaybackOutput {
     pub device_id: String,
     pub device_volume: u8,

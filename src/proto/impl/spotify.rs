@@ -1,6 +1,23 @@
 use crate::proto;
 use crate::sharify::spotify_web_utils;
 
+impl From<spotify_web_utils::SpotifyCurrentPlaybackOutput> for proto::spotify::PlaybackState {
+    fn from(state: spotify_web_utils::SpotifyCurrentPlaybackOutput) -> Self {
+        Self {
+            device_id: state.device_id,
+            device_volume: state.device_volume as _,
+            shuffle: state.shuffle,
+            progress_ms: state.progress_ms,
+            duration_ms: state.duration_ms,
+            is_playing: state.is_playing,
+            track_id: state.track_id,
+            track_name: state.track_name,
+            artist_name: state.artist_name,
+            album_image_src: state.album_image_src,
+        }
+    }
+}
+
 impl From<proto::spotify::Track> for spotify_web_utils::SpotifyTrack {
     fn from(track: proto::spotify::Track) -> Self {
         Self {

@@ -8,27 +8,29 @@ mod sharify;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use actix_cors::Cors;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::middleware;
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, Mutex, RwLock};
 
-use sharify::room::RoomManager;
-
-use crate::sharify::websocket::{self, SharifyWsManager};
+use sharify::room::{RoomID, RoomManager};
+use sharify::websocket::{self, SharifyWsManager};
 
 const SOCKET_ADDR: (u8, u8, u8, u8, u16) = (0, 0, 0, 0, 3100);
 
 // static REFRESH_TOKEN_INTERVALS: OnceLock<Arc<Mutex<HashMap<RoomID, SpawnHandle>>>> =
 //     OnceLock::new();
-// static DATA_FETCHING_INTERVALS: OnceLock<Arc<Mutex<HashMap<RoomID, SpawnHandle>>>> =
-//     OnceLock::new();
+static DATA_FETCHING_INTERVALS: OnceLock<Arc<Mutex<HashMap<RoomID, mpsc::Sender<()>>>>> =
+    OnceLock::new();
 
-pub const DATA_FETCHING_INTERVAL: u64 = 5000;
+pub const DATA_FETCHING_INTERVAL: Duration = Duration::from_millis(5000);
+pub const SPOTIFY_FETCHING_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 2);
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -65,11 +67,11 @@ async fn serve() -> std::io::Result<()> {
             .app_data(web::Data::new(Arc::clone(&sharify_state)))
             .default_service(web::to(HttpResponse::NotFound))
             .service(routes::root)
-            .service(routes::post_command)
+            .service(routes::proto_command)
             .service(routes::code_verifier)
             .service(routes::code_challenge)
             .service(
-                web::resource("/v1/{room_id}/{client_id}")
+                web::resource("/v1/{room_id}/{user_id}")
                     .route(web::get().to(websocket::SharifyWsInstance::init)),
             )
     })

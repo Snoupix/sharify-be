@@ -4,8 +4,10 @@ use actix_web::web;
 use actix_web::{get, post, HttpResponse, Responder};
 use prost::Message as _;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::proto::cmd::{command_response, http_command, CommandResponse, HttpCommand};
+use crate::proto::create_error_response;
 use crate::sharify;
 use crate::sharify::room::{CredentialsInput, RoomError, RoomManager};
 use crate::sharify::spotify::Timestamp;
@@ -16,7 +18,7 @@ pub async fn root() -> impl Responder {
 }
 
 #[post("/v1")]
-pub async fn post_command(
+pub async fn proto_command(
     body: web::Payload,
     sharify_state: web::Data<Arc<RwLock<RoomManager>>>,
 ) -> impl Responder {
@@ -33,14 +35,14 @@ pub async fn post_command(
 
     match cmd_type {
         http_command::Type::CreateRoom(http_command::CreateRoom {
-            client_id,
+            user_id,
             username,
             name,
             credentials: Some(credentials),
         }) => {
             let mut state_guard = sharify_state.write().await;
             let room = match state_guard.create_room(
-                client_id,
+                user_id,
                 username,
                 name,
                 CredentialsInput {
@@ -52,7 +54,10 @@ pub async fn post_command(
             ) {
                 Ok(room) => room,
                 Err(RoomError { error }) => {
-                    return HttpResponse::BadRequest().body(error);
+                    return match create_error_response(error) {
+                        Err(err) => HttpResponse::InternalServerError().body(err),
+                        Ok(buf) => HttpResponse::BadRequest().body(buf),
+                    };
                 }
             };
 
@@ -70,6 +75,33 @@ pub async fn post_command(
             }
 
             HttpResponse::Created().body(buf)
+        }
+        http_command::Type::GetRoom(http_command::GetRoom { room_id }) => {
+            let state_guard = sharify_state.read().await;
+            let Ok(uuid) = Uuid::from_slice(&room_id[..16]) else {
+                return match create_error_response("Wrong UUID format") {
+                    Err(err) => HttpResponse::InternalServerError().body(err),
+                    Ok(buf) => HttpResponse::BadRequest().body(buf),
+                };
+            };
+            let Some(room) = state_guard.get_room(&uuid) else {
+                return HttpResponse::NotFound().finish();
+            };
+
+            let proto_command = CommandResponse {
+                r#type: Some(command_response::Type::Room(room.clone().into())),
+            };
+
+            drop(state_guard);
+
+            let mut buf = Vec::new();
+            if let Err(err) = proto_command.encode(&mut buf) {
+                return HttpResponse::InternalServerError().body(format!(
+                    "Unexpected error while encoding newly created Room to protobuf command: {err}"
+                ));
+            }
+
+            HttpResponse::Ok().body(buf)
         }
         _ => HttpResponse::ServiceUnavailable()
             .body("Unreachable error: POST command unhandled or missing command parts"),

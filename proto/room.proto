@@ -12,12 +12,12 @@ message Room {
   bytes id = 1;
   string name = 2;
   string password = 3;
-  repeated RoomClient clients = 4;
-  repeated string banned_clients = 5;
+  repeated RoomUser users = 4;
+  repeated string banned_users = 5;
   role.RoleManager role_manager = 6;
   repeated RoomTrack tracks_queue = 7;
   repeated Log logs = 8;
-  uint32 max_clients = 9;
+  uint32 max_users = 9;
 }
 
 message CredentialsInput {
@@ -35,13 +35,13 @@ message SpotifyTokens {
 }
 
 message RoomTrack {
-  string client_id = 1;
+  string user_id = 1;
   string track_id = 2;
   string track_name = 3;
   uint32 track_duration = 4;
 }
 
-message RoomClient {
+message RoomUser {
   string id = 1;
   string username = 2;
   // UUID

@@ -30,7 +30,7 @@ impl From<role::RolePermission> for proto::role::RolePermission {
 impl From<proto::role::Role> for role::Role {
     fn from(role: proto::role::Role) -> Self {
         Self {
-            id: Uuid::from_slice_le(&role.id[..16]).unwrap(),
+            id: Uuid::from_slice(&role.id[..16]).unwrap(),
             name: role.name,
             permissions: role.permissions.map(Into::into).unwrap(),
         }
@@ -40,7 +40,7 @@ impl From<proto::role::Role> for role::Role {
 impl From<role::Role> for proto::role::Role {
     fn from(role: role::Role) -> Self {
         Self {
-            id: role.id.to_bytes_le().into(),
+            id: role.id.into_bytes().into(),
             name: role.name,
             permissions: Some(role.permissions.into()),
         }

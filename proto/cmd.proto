@@ -8,13 +8,18 @@ import "room.proto";
 message HttpCommand {
   oneof type {
     CreateRoom create_room = 1;
+    GetRoom get_room = 2;
   }
 
   message CreateRoom {
-    string client_id = 1;
+    string user_id = 1;
     string username = 2;
     string name = 3;
     Credentials credentials = 4;
+  }
+
+  message GetRoom {
+    bytes room_id = 1;
   }
 
   message Credentials {
@@ -27,32 +32,38 @@ message HttpCommand {
 
 message Command {
   oneof type {
-    string search = 1;
-    room.RoomTrack add_to_queue = 2;
-    uint32 set_volume = 3;
     // Useless bool value
-    bool play_resume = 4;
+    bool get_room = 1;
+    string search = 2;
+    AddTrackToQueue add_to_queue = 3;
+    uint32 set_volume = 4;
     // Useless bool value
-    bool pause = 5;
+    bool play_resume = 5;
     // Useless bool value
-    bool skip_next = 6;
+    bool pause = 6;
     // Useless bool value
-    bool skip_previous = 7;
-    uint64 seek_to_pos = 8;
-    Kick kick = 9;
-    Ban ban = 10;
+    bool skip_next = 7;
     // Useless bool value
-    bool get_room = 11;
+    bool skip_previous = 8;
+    uint64 seek_to_pos = 9;
+    Kick kick = 10;
+    Ban ban = 11;
+    // Useless bool value
+    bool leave_room = 12;
   }
 
   message Kick {
-    string client_id = 1;
+    string user_id = 1;
     string reason = 2;
   }
 
   message Ban {
-    string client_id = 1;
+    string user_id = 1;
     string reason = 2;
+  }
+
+  message AddTrackToQueue {
+    string track_id = 1;
   }
 }
 
@@ -61,10 +72,11 @@ message CommandResponse {
     // Useless bool value
     bool unauthorized = 1;
     room.Room room = 2;
-    spotify.TrackArray spotify_tracks = 3;
-    string generic_error = 4;
-    Kick kick = 5;
-    Ban ban = 6;
+    string generic_error = 3;
+    Kick kick = 4;
+    Ban ban = 5;
+    SpotifyPlaybackState spotify_playback_state = 6;
+    spotify.TrackArray spotify_search_result = 7;
   }
 
   message Kick {
@@ -73,5 +85,11 @@ message CommandResponse {
 
   message Ban {
     string reason = 1;
+  }
+
+  message SpotifyPlaybackState {
+    optional spotify.PlaybackState state = 1;
+    spotify.TrackArray previous_tracks = 2;
+    spotify.TrackArray next_tracks = 3;
   }
 }

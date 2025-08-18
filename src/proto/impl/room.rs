@@ -95,7 +95,7 @@ impl From<room::RoomError> for proto::room::RoomError {
 impl From<proto::room::RoomTrack> for room::RoomTrack {
     fn from(track: proto::room::RoomTrack) -> Self {
         Self {
-            client_id: track.client_id,
+            user_id: track.user_id,
             track_id: track.track_id,
             track_name: track.track_name,
             track_duration: track.track_duration,
@@ -107,7 +107,7 @@ impl From<proto::room::RoomTrack> for room::RoomTrack {
 impl From<room::RoomTrack> for proto::room::RoomTrack {
     fn from(track: room::RoomTrack) -> Self {
         Self {
-            client_id: track.client_id,
+            user_id: track.user_id,
             track_id: track.track_id,
             track_name: track.track_name,
             track_duration: track.track_duration,
@@ -115,24 +115,24 @@ impl From<room::RoomTrack> for proto::room::RoomTrack {
     }
 }
 
-impl From<proto::room::RoomClient> for room::RoomClient {
-    fn from(client: proto::room::RoomClient) -> Self {
+impl From<proto::room::RoomUser> for room::RoomUser {
+    fn from(user: proto::room::RoomUser) -> Self {
         Self {
-            id: client.id,
-            username: client.username,
-            role_id: Uuid::from_slice_le(&client.role_id[..16]).unwrap(),
-            is_connected: client.is_connected,
+            id: user.id,
+            username: user.username,
+            role_id: Uuid::from_slice(&user.role_id[..16]).unwrap(),
+            is_connected: user.is_connected,
         }
     }
 }
 
-impl From<room::RoomClient> for proto::room::RoomClient {
-    fn from(client: room::RoomClient) -> Self {
+impl From<room::RoomUser> for proto::room::RoomUser {
+    fn from(user: room::RoomUser) -> Self {
         Self {
-            id: client.id,
-            username: client.username,
-            role_id: client.role_id.to_bytes_le().into(),
-            is_connected: client.is_connected,
+            id: user.id,
+            username: user.username,
+            role_id: user.role_id.into_bytes().into(),
+            is_connected: user.is_connected,
         }
     }
 }
@@ -140,15 +140,15 @@ impl From<room::RoomClient> for proto::room::RoomClient {
 impl From<proto::room::Room> for room::Room {
     fn from(room: proto::room::Room) -> Self {
         Self {
-            id: Uuid::from_slice_le(&room.id[..16]).unwrap(),
+            id: Uuid::from_slice(&room.id[..16]).unwrap(),
             name: room.name,
             password: room.password,
-            clients: room.clients.into_iter().map(Into::into).collect(),
-            banned_clients: room.banned_clients,
+            users: room.users.into_iter().map(Into::into).collect(),
+            banned_users: room.banned_users,
             role_manager: room.role_manager.map(Into::into).unwrap_or_default(),
             tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
             logs: room.logs.into_iter().map(Into::into).collect(),
-            max_clients: room.max_clients,
+            max_users: room.max_users,
             inactive_for: None,
             spotify_handler: Spotify::default(),
         }
@@ -158,15 +158,15 @@ impl From<proto::room::Room> for room::Room {
 impl From<room::Room> for proto::room::Room {
     fn from(room: room::Room) -> Self {
         Self {
-            id: room.id.to_bytes_le().into(),
+            id: room.id.into_bytes().into(),
             name: room.name,
             password: room.password,
-            clients: room.clients.into_iter().map(Into::into).collect(),
-            banned_clients: room.banned_clients,
+            users: room.users.into_iter().map(Into::into).collect(),
+            banned_users: room.banned_users,
             role_manager: Some(room.role_manager.into()),
             tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
             logs: room.logs.into_iter().map(Into::into).collect(),
-            max_clients: room.max_clients,
+            max_users: room.max_users,
         }
     }
 }

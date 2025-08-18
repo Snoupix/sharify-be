@@ -4,7 +4,7 @@ use rand::distr::Alphanumeric;
 use rand::{rng, Rng};
 use sha2::{Digest, Sha256};
 
-use super::room::{RoomClientID, MAX_EMAIL_CHAR, MIN_EMAIL_CHAR};
+use super::room::{RoomUserID, MAX_EMAIL_CHAR, MIN_EMAIL_CHAR};
 
 static __COMPTIME_ASSERTIONS: () = {
     assert!((MIN_EMAIL_CHAR as u8) < (MAX_EMAIL_CHAR as u8));
@@ -78,7 +78,7 @@ pub fn encode_user_email(email: String, uuid_len: usize) -> String {
     hex_values.join(":")
 }
 
-pub fn decode_user_email(user_id: &RoomClientID) -> String {
+pub fn decode_user_email(user_id: &RoomUserID) -> String {
     user_id.split(':').fold(String::new(), |mut res, s| {
         let (b1, b2) = (
             u8::from_str_radix(&s[0..=1], 16).unwrap(),

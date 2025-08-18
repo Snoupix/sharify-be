@@ -5,9 +5,8 @@ use tokio::sync::RwLock;
 
 use crate::proto::cmd::command;
 use crate::proto::cmd::command_response;
-use crate::proto::room::RoomTrack;
 use crate::sharify::room::RoomManager;
-use crate::sharify::room::{RoomClientID, RoomID};
+use crate::sharify::room::{RoomID, RoomUserID};
 use crate::sharify::spotify::Spotify;
 
 #[async_trait]
@@ -15,8 +14,9 @@ trait Commands {
     type T;
     type Output;
 
+    async fn get_room(self) -> Self::Output;
     async fn search(self, name: String) -> Self::Output;
-    async fn add_to_queue(self, track: RoomTrack) -> Self::Output;
+    async fn add_to_queue(self, track: command::AddTrackToQueue) -> Self::Output;
     async fn set_volume(self, percentage: u8) -> Self::Output;
     async fn play_resume(self) -> Self::Output;
     async fn pause(self) -> Self::Output;
@@ -25,24 +25,24 @@ trait Commands {
     async fn seek_to_pos(self, pos: u64) -> Self::Output;
     async fn kick(self, opts: command::Kick) -> Self::Output;
     async fn ban(self, opts: command::Ban) -> Self::Output;
-    async fn get_room(self) -> Self::Output;
+    async fn leave_room(self) -> Self::Output;
 }
 
 pub struct Command {
     sharify_state: Arc<RwLock<RoomManager>>,
-    client_id: RoomClientID,
+    user_id: RoomUserID,
     room_id: RoomID,
 }
 
 impl Command {
     pub fn new(
         sharify_state: Arc<RwLock<RoomManager>>,
-        author_id: RoomClientID,
+        author_id: RoomUserID,
         room_id: RoomID,
     ) -> Self {
         Self {
             sharify_state,
-            client_id: author_id,
+            user_id: author_id,
             room_id,
         }
     }
@@ -56,6 +56,7 @@ impl Command {
         }
 
         match cmd_type {
+            command::Type::GetRoom(_) => self.get_room().await,
             command::Type::Search(name) => self.search(name).await,
             command::Type::AddToQueue(room_track) => self.add_to_queue(room_track).await,
             command::Type::SetVolume(percentage) => self.set_volume(percentage as _).await,
@@ -66,7 +67,7 @@ impl Command {
             command::Type::SeekToPos(pos) => self.seek_to_pos(pos).await,
             command::Type::Kick(opts) => self.kick(opts).await,
             command::Type::Ban(opts) => self.ban(opts).await,
-            command::Type::GetRoom(_) => self.get_room().await,
+            command::Type::LeaveRoom(_) => self.leave_room().await,
         }
     }
 
@@ -75,22 +76,23 @@ impl Command {
         let Some(room) = guard.get_room(&self.room_id) else {
             return false;
         };
-        let Some(client_role_id) = room.clients.iter().find_map(|client| {
-            if client.id == self.client_id {
-                Some(client.role_id)
+        let Some(user_role_id) = room.users.iter().find_map(|user| {
+            if user.id == self.user_id {
+                Some(user.role_id)
             } else {
                 None
             }
         }) else {
             return false;
         };
-        let Some(role) = room.role_manager.get_role_by_id(&client_role_id) else {
+        let Some(role) = room.role_manager.get_role_by_id(&user_role_id) else {
             return false;
         };
         let perms = role.permissions;
         drop(guard);
 
         match *cmd_type {
+            command::Type::GetRoom(_) | command::Type::LeaveRoom(_) => true,
             command::Type::Search(_) | command::Type::AddToQueue(_) => perms.can_add_song,
             command::Type::SetVolume(_)
             | command::Type::PlayResume(_)
@@ -99,7 +101,6 @@ impl Command {
             | command::Type::SkipPrevious(_)
             | command::Type::SeekToPos(_) => perms.can_use_controls,
             command::Type::Kick(_) | command::Type::Ban(_) => perms.can_manage_users,
-            command::Type::GetRoom(_) => true,
         }
     }
 
@@ -121,6 +122,17 @@ impl Commands for Command {
     type T = command_response::Type;
     type Output = Result<Option<Self::T>, Self::T>;
 
+    async fn get_room(self) -> Self::Output {
+        let guard = self.sharify_state.read().await;
+
+        let room = guard
+            .get_room(&self.room_id)
+            .ok_or(Self::T::GenericError("Room not found".into()))?
+            .clone();
+
+        Ok(Some(Self::T::Room(room.into())))
+    }
+
     async fn search(self, name: String) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
@@ -129,10 +141,10 @@ impl Commands for Command {
             .await
             .map_err(Self::T::GenericError)?;
 
-        Ok(Some(Self::T::SpotifyTracks(tracks.into())))
+        Ok(Some(Self::T::SpotifySearchResult(tracks.into())))
     }
 
-    async fn add_to_queue(self, track: RoomTrack) -> Self::Output {
+    async fn add_to_queue(self, track: command::AddTrackToQueue) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
         spotify
@@ -204,7 +216,7 @@ impl Commands for Command {
         let mut guard = self.sharify_state.write().await;
 
         guard
-            .kick_client(self.room_id, &self.client_id, &opts.client_id, opts.reason)
+            .kick_user(self.room_id, &self.user_id, &opts.user_id, opts.reason)
             .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
@@ -214,20 +226,19 @@ impl Commands for Command {
         let mut guard = self.sharify_state.write().await;
 
         guard
-            .ban_client(self.room_id, &self.client_id, &opts.client_id, opts.reason)
+            .ban_user(self.room_id, &self.user_id, &opts.user_id, opts.reason)
             .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
 
-    async fn get_room(self) -> Self::Output {
-        let guard = self.sharify_state.read().await;
+    async fn leave_room(self) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
 
-        let room = guard
-            .get_room(&self.room_id)
-            .ok_or(Self::T::GenericError("Room not found".into()))?
-            .clone();
+        guard
+            .leave_room(self.room_id, self.user_id)
+            .map_err(Into::<Self::T>::into)?;
 
-        Ok(Some(Self::T::Room(room.into())))
+        Ok(None)
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
-use actix_rt::time::timeout;
+use actix_rt::time;
 use futures_util::{SinkExt as _, TryStreamExt as _};
 use prost::Message as _;
 use reqwest::{Client, ClientBuilder, StatusCode};
@@ -21,7 +21,7 @@ static NEXT_ROOM_ID: AtomicU8 = AtomicU8::new(1);
 async fn run_server_with_timeout(seconds: u64, mut cancel_rx: mpsc::Receiver<()>) {
     actix_rt::spawn(async move {
         tokio::select! {
-            timeout = timeout(Duration::from_secs(seconds), crate::serve()) => {
+            timeout = time::timeout(Duration::from_secs(seconds), crate::serve()) => {
                 if timeout.is_err() {
                     panic!("Timeout hit during test");
                 }
@@ -52,14 +52,14 @@ async fn create_room_impl(sv_timeout: u64) -> (mpsc::Sender<()>, Client, Room) {
     let (cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
     run_server_with_timeout(sv_timeout, cancel_rx).await;
 
-    let client = ClientBuilder::default()
+    let user = ClientBuilder::default()
         .timeout(Duration::from_secs(60 * 2))
         .build()
         .unwrap();
 
     let command = HttpCommand {
         r#type: Some(http_command::Type::CreateRoom(http_command::CreateRoom {
-            client_id: utils::encode_user_email(
+            user_id: utils::encode_user_email(
                 format!(
                     "test{}@email.com",
                     NEXT_ROOM_ID.fetch_add(1, Ordering::SeqCst)
@@ -83,7 +83,7 @@ async fn create_room_impl(sv_timeout: u64) -> (mpsc::Sender<()>, Client, Room) {
         "Failed to encode HTTPCommand to buffer"
     );
 
-    let req = client
+    let req = user
         .post(BASE_URL)
         .body(buf)
         .send()
@@ -104,7 +104,7 @@ async fn create_room_impl(sv_timeout: u64) -> (mpsc::Sender<()>, Client, Room) {
         unreachable!();
     };
 
-    (cancel_tx, client, room.into())
+    (cancel_tx, user, room.into())
 }
 
 #[actix_rt::test]
@@ -114,10 +114,10 @@ async fn create_room() {
 
 #[actix_rt::test]
 async fn create_room_and_get_room_via_ws() {
-    let (cancel_tx, client, room) = create_room_impl(60 * 4).await;
+    let (cancel_tx, user, room) = create_room_impl(60 * 4).await;
 
-    let req = client
-        .get(format!("{BASE_URL}/{}/{}", room.id, room.clients[0].id))
+    let req = user
+        .get(format!("{BASE_URL}/{}/{}", room.id, room.users[0].id))
         .upgrade()
         .send()
         .await
