@@ -12,9 +12,9 @@ use super::role::{Role, RoleManager};
 use super::spotify::{Spotify, SpotifyTokens, Timestamp};
 use super::utils::decode_user_email;
 
-const MAX_USERS: u32 = 15;
+const MAX_USERS: usize = 15;
 const MAX_LOGS_LEN: usize = 25;
-pub const INACTIVE_PARTY_MINS: u32 = 5;
+pub const INACTIVE_ROOM_MINS: u32 = 5;
 
 // email / uuid allowed chars
 pub(super) const MIN_EMAIL_CHAR: char = '-';
@@ -34,12 +34,16 @@ pub struct Room {
     pub role_manager: RoleManager,
     // pub current_device: Option<SpotifyApi.UserDevice>,
     pub tracks_queue: Vec<RoomTrack>,
-    pub max_users: u32,
+    pub max_users: usize,
     // TODO: Add log on every action
     /// Last 25 logs: Ban, Kick, Song added... (25 for memory purposes)
     pub logs: VecDeque<Log>,
     #[serde(skip)]
     pub inactive_for: Option<Instant>,
+    #[serde(skip)]
+    /// Since room state is sent based on commands that modifies its state, we should avoid
+    /// over-send the room state
+    pub last_data_send: Option<Instant>,
     #[serde(skip)]
     pub spotify_handler: Spotify,
 }
@@ -114,20 +118,17 @@ pub struct RoomManager {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RoomError {
-    pub error: String,
-}
-
-impl RoomError {
-    pub fn new(error: String) -> Self {
-        Self { error }
-    }
-}
-
-impl std::fmt::Display for RoomError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.error)
-    }
+pub enum RoomError {
+    RoomCreationFail,
+    RoomNotFound,
+    RoomUserNotFound,
+    RoleNotFound,
+    Unauthorized,
+    TrackNotFound,
+    RoomFull,
+    UserBanned,
+    UserIDExists,
+    Unreachable,
 }
 
 impl RoomManager {
@@ -139,9 +140,7 @@ impl RoomManager {
         creds: CredentialsInput,
     ) -> Result<Room, RoomError> {
         if self.user_id_exists(&user_id) {
-            return Err(RoomError::new(String::from(
-                "This username is already taken",
-            )));
+            return Err(RoomError::UserIDExists);
         }
 
         let id = Uuid::now_v7();
@@ -170,6 +169,7 @@ impl RoomManager {
                 max_users: MAX_USERS,
                 spotify_handler: Spotify::new(creds.into()),
                 inactive_for: None,
+                last_data_send: None,
             },
         );
 
@@ -184,9 +184,7 @@ impl RoomManager {
                 self.active_rooms.capacity(),
             );
 
-            return Err(RoomError::new(
-                "Unexpected error: Failed to create Room".into(),
-            ));
+            return Err(RoomError::RoomCreationFail);
         };
 
         for user in room.users.iter() {
@@ -200,43 +198,38 @@ impl RoomManager {
     // but if there is none, it means that the room self-destructed for inactivity
     pub fn delete_room(
         &mut self,
-        id: RoomID,
+        room_id: RoomID,
         _user_id: Option<RoomUserID>,
     ) -> Result<(), RoomError> {
-        let room = self
-            .get_room(&id)
-            .ok_or(RoomError::new(format!("Room ID {id} not found")))?;
+        let room = self.get_room(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         if let Some(user_id) = _user_id {
-            let Some(user) = room.users.iter().find(|user| user.id == user_id) else {
-                return Err(RoomError::new(
-                    "Unexpected error: User not found on that Room".into(),
-                ));
-            };
+            let user = room
+                .users
+                .iter()
+                .find(|user| user.id == user_id)
+                .ok_or(RoomError::RoomUserNotFound)?;
 
-            let Some(role) = room.role_manager.get_role_by_id(&user.role_id) else {
-                return Err(RoomError::new(
-                    "Unexpected error: User Role not found on that Room".into(),
-                ));
-            };
+            let role = room
+                .role_manager
+                .get_role_by_id(&user.role_id)
+                .ok_or(RoomError::RoleNotFound)?;
 
             if !role.permissions.can_manage_room {
                 error!(
                     "User ID {} tried to delete room ID {} while not being having permissions ({:#?})",
-                    user_id, id, role
+                    user_id, room_id, role
                 );
 
-                return Err(RoomError::new(
-                    "Your role does not allow you to delete a room".into(),
-                ));
+                return Err(RoomError::Unauthorized);
             }
 
             debug!(
                 "[{}] User ID {} is deleting '{}' room",
-                id, user_id, room.name
+                room_id, user_id, room.name
             );
         } else {
-            debug!("Deleting room ID {id} automatically for inactivity");
+            debug!("Deleting room ID {room_id} automatically for inactivity");
         }
 
         let users = room.users.clone();
@@ -246,7 +239,7 @@ impl RoomManager {
             self.user_ids.remove(&user.id);
         }
 
-        self.active_rooms.remove(&id);
+        self.active_rooms.remove(&room_id);
 
         Ok(())
     }
@@ -257,30 +250,24 @@ impl RoomManager {
         user_id: &RoomUserID,
         is_connected: bool,
     ) -> Result<(), RoomError> {
-        let Some(room) = self.get_room_mut(&room_id) else {
-            debug!("Cannot find room id: {room_id}");
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
-            return Err(RoomError::new(format!("Room {room_id} not found")));
-        };
-
-        let Some(user) = room.users.iter_mut().find(|c| &c.id == user_id) else {
-            debug!("Cannot find user id {user_id} for room id: {room_id}");
-
-            return Err(RoomError::new(format!(
-                "User {user_id} not found for room {room_id}"
-            )));
-        };
+        let user = room
+            .users
+            .iter_mut()
+            .find(|c| &c.id == user_id)
+            .ok_or(RoomError::RoomUserNotFound)?;
 
         user.is_connected = is_connected;
 
         Ok(())
     }
 
-    pub fn get_room(&self, id: &RoomID) -> Option<&Room> {
-        let room = self.active_rooms.get(&id);
+    pub fn get_room(&self, room_id: &RoomID) -> Option<&Room> {
+        let room = self.active_rooms.get(room_id);
 
         if room.is_none() {
-            error!("Cannot find room id: {}", id);
+            error!("Cannot find room id: {}", room_id);
 
             return None;
         }
@@ -314,21 +301,13 @@ impl RoomManager {
         track_name: String,
         track_duration: u32,
     ) -> Result<(), RoomError> {
-        let Some(room) = self.get_room_mut(&id) else {
-            error!("Cannot find room id: {id}");
+        let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
 
-            return Err(RoomError::new(
-                "An error has occured while adding this track to the queue, Room not found".into(),
-            ));
-        };
-
-        let Some(user) = room.users.iter().find(|c| c.id == user_id) else {
-            debug!("Cannot find user id: {user_id} on id: {id}");
-
-            return Err(RoomError::new(
-                "An error has occured while adding this track to the queue, User not found on this room".into()
-            ));
-        };
+        let user = room
+            .users
+            .iter()
+            .find(|c| c.id == user_id)
+            .ok_or(RoomError::RoomUserNotFound)?;
 
         room.tracks_queue.push(RoomTrack {
             track_id,
@@ -351,13 +330,7 @@ impl RoomManager {
         id: RoomID,
         track_id: String,
     ) -> Result<(), RoomError> {
-        let Some(room) = self.get_room_mut(&id) else {
-            error!("Cannot find room id: {id}");
-
-            return Err(RoomError::new(
-                "An error has occured while removing a track from queue: Room not found".into(),
-            ));
-        };
+        let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
 
         if let Some(idx) = room
             .tracks_queue
@@ -382,7 +355,7 @@ impl RoomManager {
             return Ok(());
         }
 
-        Err(RoomError::new("Track not found in the queue".into()))
+        Err(RoomError::TrackNotFound)
     }
 
     pub fn kick_user(
@@ -392,25 +365,21 @@ impl RoomManager {
         user_id: &RoomUserID,
         reason: String,
     ) -> Result<(), RoomError> {
-        let Some(room) = self.active_rooms.get_mut(&room_id) else {
-            error!("Cannot find room id: {room_id}");
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
-            return Err(RoomError::new("Cannot find room".into()));
-        };
-
+        // TODO: These are considered unrecoverable errors but at the Room' scope, not the app's
+        // So destroy the room instead of crashing the app
         let Some(author) = room.users.iter().find(|c| c.id == *author_id).cloned() else {
             error!("Unexpected error: Kick attempt from author id {author_id} that's not in the room id {room_id}");
+            dbg!(room);
 
-            return Err(RoomError::new(
-                "Kick author is not in the room (anymore)".into(),
-            ));
+            return Err(RoomError::Unreachable);
         };
         let Some(user) = room.users.iter().find(|c| c.id == *user_id).cloned() else {
             error!("Unexpected error: Attempt to kick a user id {user_id} that's not in the room id {room_id}");
+            dbg!(room);
 
-            return Err(RoomError::new(
-                "Tried to kick a user that's not in the room (anymore)".into(),
-            ));
+            return Err(RoomError::Unreachable);
         };
 
         room.users.retain(|c| c.id != *user_id);
@@ -438,32 +407,26 @@ impl RoomManager {
         user_id: &RoomUserID,
         reason: String,
     ) -> Result<(), RoomError> {
-        let Some(room) = self.active_rooms.get_mut(&room_id) else {
-            error!("Cannot find room id: {room_id}");
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
-            return Err(RoomError::new("Cannot find room".into()));
-        };
-
+        // TODO: These are considered unrecoverable errors but at the Room' scope, not the app's
+        // So destroy the room instead of crashing the app
         let Some(author) = room.users.iter().find(|c| c.id == *author_id).cloned() else {
             error!("Unexpected error: Ban attempt from author id {author_id} that's not in the room id {room_id}");
 
-            return Err(RoomError::new(
-                "Ban author is not in the room (anymore)".into(),
-            ));
+            return Err(RoomError::Unreachable);
         };
         let Some(user) = room.users.iter().find(|c| c.id == *user_id).cloned() else {
             error!("Unexpected error: Attempt to ban a user id {user_id} that's not in the room id {room_id}");
 
-            return Err(RoomError::new(
-                "Tried to ban a user that's not in the room (anymore)".into(),
-            ));
+            return Err(RoomError::Unreachable);
         };
 
         room.users.retain(|c| c.id != *user_id);
 
-        self.user_ids.remove(&user.id);
-
         room.banned_users.push(user_id.clone());
+
+        self.user_ids.remove(&user.id);
 
         self.append_log(
             room_id,
@@ -486,27 +449,22 @@ impl RoomManager {
         user_id: RoomUserID,
     ) -> Result<Room, RoomError> {
         if self.user_id_exists(&user_id) {
-            return Err(RoomError::new(format!(
+            error!(
                 "Error: user ID (approx email: {}) is already in use",
                 decode_user_email(&user_id)
-            )));
+            );
+
+            return Err(RoomError::UserIDExists);
         }
 
-        let Some(room) = self.active_rooms.get_mut(&room_id) else {
-            debug!("Cannot find room id: {room_id}");
-
-            return Err(RoomError::new(format!("Room [{}] not found", room_id)));
-        };
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         if room.banned_users.contains(&user_id) {
-            return Err(RoomError::new("You are banned from that Room".into()));
+            return Err(RoomError::UserBanned);
         }
 
-        if room.users.len() == room.max_users as usize {
-            return Err(RoomError::new(format!(
-                "Room full, max users: {}",
-                room.max_users
-            )));
+        if room.users.len() == room.max_users {
+            return Err(RoomError::RoomFull);
         }
 
         let role = match room.role_manager.get_roles().last().cloned() {
@@ -527,11 +485,13 @@ impl RoomManager {
             is_connected: false,
         });
 
+        let room = room.clone();
+
         debug!("[{}] Added {} to Room {}", room_id, username, room.name);
 
         self.user_ids.insert(user_id);
 
-        Ok(room.to_owned())
+        Ok(room)
     }
 
     pub fn leave_room(&mut self, room_id: RoomID, user_id: RoomUserID) -> Result<(), RoomError> {
@@ -539,29 +499,23 @@ impl RoomManager {
             return self.delete_room(room_id, Some(user_id));
         }
 
-        let Some(room) = self.active_rooms.get_mut(&room_id) else {
-            error!("Cannot find room id: {room_id}");
-
-            return Err(RoomError::new("Cannot find room".into()));
-        };
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         let user = room
             .users
             .iter()
             .find(|c| c.id == user_id)
             .cloned()
-            .ok_or(RoomError::new(format!(
-                "Cannot find user ID {user_id} on room ID {room_id}"
-            )))?;
+            .ok_or(RoomError::RoomUserNotFound)?;
 
         room.users.retain(|c| c.id != user_id);
-
-        self.user_ids.remove(&user.id);
 
         debug!(
             "Removed {} from room {} {}",
             user.username, room.name, room_id
         );
+
+        self.user_ids.remove(&user.id);
 
         Ok(())
     }
@@ -693,17 +647,13 @@ impl RoomManager {
         user_id: RoomUserID,
         username: String,
     ) -> Result<(), RoomError> {
-        let room = self
-            .get_room_mut(&id)
-            .ok_or(RoomError::new(format!("Room ID {id} not found")))?;
+        let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
 
-        let Some(user) = room.users.iter_mut().find(|c| c.id == user_id) else {
-            error!("Unexpected error: A User newly named {username} tried to rename themselves on the Room ID {id} but the User (ID {user_id}) doesn't exists within the room");
-
-            return Err(RoomError::new(format!(
-                "Unexpected error: User id {user_id} not found on room id {id}"
-            )));
-        };
+        let user = room
+            .users
+            .iter_mut()
+            .find(|c| c.id == user_id)
+            .ok_or(RoomError::RoomUserNotFound)?;
 
         user.username.clone_from(&username);
 
@@ -719,16 +669,14 @@ impl RoomManager {
         let room = self
             .active_rooms
             .get(&room_id)
-            .ok_or(RoomError::new("Cannot find room".into()))?;
+            .ok_or(RoomError::RoomNotFound)?;
 
         let user = room
             .users
             .iter()
             .find(|&c| c.id == *user_id)
             .cloned()
-            .ok_or(RoomError::new(format!(
-                "Cannot find user ID {user_id} on room ID {room_id}"
-            )))?;
+            .ok_or(RoomError::RoomUserNotFound)?;
 
         let Some(role) = room.role_manager.get_role_by_id(&user.role_id) else {
             error!(
@@ -737,9 +685,7 @@ impl RoomManager {
                 room.role_manager.get_roles()
             );
 
-            return Err(RoomError::new(
-                "Cannot find user's role within the room".into(),
-            ));
+            return Err(RoomError::RoleNotFound);
         };
 
         // If role allows to manage room (most likely owner or one of them) and if there is nobody
@@ -764,9 +710,7 @@ impl RoomManager {
     }
 
     pub fn append_log(&mut self, room_id: RoomID, log: Log) -> Result<(), RoomError> {
-        let room = self
-            .get_room_mut(&room_id)
-            .ok_or(RoomError::new(format!("Room ID {room_id} not found")))?;
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         if room.logs.len() >= MAX_LOGS_LEN {
             room.logs.pop_front();

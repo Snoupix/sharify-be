@@ -17,7 +17,7 @@ message Room {
   role.RoleManager role_manager = 6;
   repeated RoomTrack tracks_queue = 7;
   repeated Log logs = 8;
-  uint32 max_users = 9;
+  uint64 max_users = 9;
 }
 
 message CredentialsInput {
@@ -49,8 +49,17 @@ message RoomUser {
   bool is_connected = 4;
 }
 
-message RoomError {
-  string error = 1;
+enum RoomError {
+    ROOM_CREATION_FAIL = 0;
+    ROOM_NOT_FOUND = 1;
+    ROOM_USER_NOT_FOUND = 2;
+    ROLE_NOT_FOUND = 3;
+    UNAUTHORIZED = 4;
+    TRACK_NOT_FOUND = 5;
+    ROOM_FULL = 6;
+    USER_BANNED = 7;
+    USER_ID_EXISTS = 8;
+    UNREACHABLE = 9;
 }
 
 message Log {

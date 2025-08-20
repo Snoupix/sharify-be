@@ -3,7 +3,6 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use crate::proto;
-use crate::proto::cmd::command_response;
 use crate::sharify::room;
 use crate::sharify::spotify::Spotify;
 
@@ -46,29 +45,78 @@ impl From<room::Log> for proto::room::Log {
     }
 }
 
-impl From<proto::cmd::command_response::Type> for room::RoomError {
-    fn from(err: proto::cmd::command_response::Type) -> Self {
-        let command_response::Type::GenericError(error) = err else {
-            unreachable!();
-        };
+impl From<room::RoomError> for i32 {
+    fn from(err: room::RoomError) -> Self {
+        match err {
+            room::RoomError::RoomCreationFail => 0,
+            room::RoomError::RoomNotFound => 1,
+            room::RoomError::RoomUserNotFound => 2,
+            room::RoomError::RoleNotFound => 3,
+            room::RoomError::Unauthorized => 4,
+            room::RoomError::TrackNotFound => 5,
+            room::RoomError::RoomFull => 6,
+            room::RoomError::UserBanned => 7,
+            room::RoomError::UserIDExists => 8,
+            room::RoomError::Unreachable => 9,
+        }
+    }
+}
 
-        Self { error }
+impl From<i32> for room::RoomError {
+    fn from(log: i32) -> Self {
+        match log {
+            0 => room::RoomError::RoomCreationFail,
+            1 => room::RoomError::RoomNotFound,
+            2 => room::RoomError::RoomUserNotFound,
+            3 => room::RoomError::RoleNotFound,
+            4 => room::RoomError::Unauthorized,
+            5 => room::RoomError::TrackNotFound,
+            6 => room::RoomError::RoomFull,
+            7 => room::RoomError::UserBanned,
+            8 => room::RoomError::UserIDExists,
+            9 => room::RoomError::Unreachable,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<room::RoomError> for proto::room::RoomError {
+    fn from(err: room::RoomError) -> Self {
+        match err {
+            room::RoomError::RoomCreationFail => Self::RoomCreationFail,
+            room::RoomError::RoomNotFound => Self::RoomNotFound,
+            room::RoomError::RoomUserNotFound => Self::RoomUserNotFound,
+            room::RoomError::RoleNotFound => Self::RoleNotFound,
+            room::RoomError::Unauthorized => Self::Unauthorized,
+            room::RoomError::TrackNotFound => Self::TrackNotFound,
+            room::RoomError::RoomFull => Self::RoomFull,
+            room::RoomError::UserBanned => Self::UserBanned,
+            room::RoomError::UserIDExists => Self::UserIdExists,
+            room::RoomError::Unreachable => Self::Unreachable,
+        }
+    }
+}
+
+impl From<proto::room::RoomError> for room::RoomError {
+    fn from(err: proto::room::RoomError) -> Self {
+        match err {
+            proto::room::RoomError::RoomCreationFail => Self::RoomCreationFail,
+            proto::room::RoomError::RoomNotFound => Self::RoomNotFound,
+            proto::room::RoomError::RoomUserNotFound => Self::RoomUserNotFound,
+            proto::room::RoomError::RoleNotFound => Self::RoleNotFound,
+            proto::room::RoomError::Unauthorized => Self::Unauthorized,
+            proto::room::RoomError::TrackNotFound => Self::TrackNotFound,
+            proto::room::RoomError::RoomFull => Self::RoomFull,
+            proto::room::RoomError::UserBanned => Self::UserBanned,
+            proto::room::RoomError::UserIdExists => Self::UserIDExists,
+            proto::room::RoomError::Unreachable => Self::Unreachable,
+        }
     }
 }
 
 impl From<room::RoomError> for proto::cmd::command_response::Type {
     fn from(err: room::RoomError) -> Self {
-        Self::GenericError(err.error)
-    }
-}
-
-impl From<proto::cmd::CommandResponse> for room::RoomError {
-    fn from(err: proto::cmd::CommandResponse) -> Self {
-        let Some(proto::cmd::command_response::Type::GenericError(error)) = err.r#type else {
-            unreachable!();
-        };
-
-        Self { error }
+        Self::RoomError(err.into())
     }
 }
 
@@ -77,18 +125,6 @@ impl From<room::RoomError> for proto::cmd::CommandResponse {
         Self {
             r#type: Some(err.into()),
         }
-    }
-}
-
-impl From<proto::room::RoomError> for room::RoomError {
-    fn from(err: proto::room::RoomError) -> Self {
-        Self { error: err.error }
-    }
-}
-
-impl From<room::RoomError> for proto::room::RoomError {
-    fn from(err: room::RoomError) -> Self {
-        Self { error: err.error }
     }
 }
 
@@ -148,8 +184,9 @@ impl From<proto::room::Room> for room::Room {
             role_manager: room.role_manager.map(Into::into).unwrap_or_default(),
             tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
             logs: room.logs.into_iter().map(Into::into).collect(),
-            max_users: room.max_users,
+            max_users: room.max_users as _,
             inactive_for: None,
+            last_data_send: None,
             spotify_handler: Spotify::default(),
         }
     }
@@ -166,7 +203,7 @@ impl From<room::Room> for proto::room::Room {
             role_manager: Some(room.role_manager.into()),
             tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
             logs: room.logs.into_iter().map(Into::into).collect(),
-            max_users: room.max_users,
+            max_users: room.max_users as _,
         }
     }
 }

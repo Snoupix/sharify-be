@@ -6,8 +6,15 @@ use tokio::sync::RwLock;
 use crate::proto::cmd::command;
 use crate::proto::cmd::command_response;
 use crate::sharify::room::RoomManager;
-use crate::sharify::room::{RoomID, RoomUserID};
+use crate::sharify::room::{RoomError, RoomID, RoomUserID};
 use crate::sharify::spotify::Spotify;
+
+pub enum StateImpact {
+    Nothing,
+    Room,
+    // Anything player related is gonna affect the room state (logs for example)
+    Both,
+}
 
 #[async_trait]
 trait Commands {
@@ -47,28 +54,65 @@ impl Command {
         }
     }
 
+    /// Returns a Protobuf response
+    ///
+    /// The Ok and Err variants contain the command response that is the result and the fail reason
+    /// respectively. The second part is the StateImpact
+    ///
+    /// The Ok variant can have a None command response if the said command doesn't return data
+    ///
+    /// **StateImpact** tells what did the command impacted regarding the room state / player state
+    /// to potentially inform room members
+    ///
+    /// For DX (pattern matching) purposes, the StateImpact is also on the Err variant even if it
+    /// has no real sense because the command shouldn't have affected any state
     pub async fn process(
         self,
         cmd_type: command::Type,
-    ) -> Result<Option<command_response::Type>, command_response::Type> {
+    ) -> (
+        Result<Option<command_response::Type>, command_response::Type>,
+        StateImpact,
+    ) {
         if !self.has_permission_to(&cmd_type).await {
-            return Err(command_response::Type::Unauthorized(false));
+            return (
+                Err(command_response::Type::RoomError(
+                    RoomError::Unauthorized.into(),
+                )),
+                StateImpact::Nothing,
+            );
         }
 
-        match cmd_type {
-            command::Type::GetRoom(_) => self.get_room().await,
-            command::Type::Search(name) => self.search(name).await,
-            command::Type::AddToQueue(room_track) => self.add_to_queue(room_track).await,
-            command::Type::SetVolume(percentage) => self.set_volume(percentage as _).await,
-            command::Type::PlayResume(_) => self.play_resume().await,
-            command::Type::Pause(_) => self.pause().await,
-            command::Type::SkipNext(_) => self.skip_next().await,
-            command::Type::SkipPrevious(_) => self.skip_previous().await,
-            command::Type::SeekToPos(pos) => self.seek_to_pos(pos).await,
-            command::Type::Kick(opts) => self.kick(opts).await,
-            command::Type::Ban(opts) => self.ban(opts).await,
-            command::Type::LeaveRoom(_) => self.leave_room().await,
-        }
+        let cmd_impact = match &cmd_type {
+            command::Type::GetRoom(_) | command::Type::Search(_) => StateImpact::Nothing,
+            command::Type::LeaveRoom(_) | command::Type::Kick(_) | command::Type::Ban(_) => {
+                StateImpact::Room
+            }
+            command::Type::AddToQueue(_)
+            | command::Type::SetVolume(_)
+            | command::Type::PlayResume(_)
+            | command::Type::Pause(_)
+            | command::Type::SkipNext(_)
+            | command::Type::SkipPrevious(_)
+            | command::Type::SeekToPos(_) => StateImpact::Both,
+        };
+
+        (
+            match cmd_type {
+                command::Type::GetRoom(_) => self.get_room().await,
+                command::Type::Search(name) => self.search(name).await,
+                command::Type::AddToQueue(room_track) => self.add_to_queue(room_track).await,
+                command::Type::SetVolume(percentage) => self.set_volume(percentage as _).await,
+                command::Type::PlayResume(_) => self.play_resume().await,
+                command::Type::Pause(_) => self.pause().await,
+                command::Type::SkipNext(_) => self.skip_next().await,
+                command::Type::SkipPrevious(_) => self.skip_previous().await,
+                command::Type::SeekToPos(pos) => self.seek_to_pos(pos).await,
+                command::Type::Kick(opts) => self.kick(opts).await,
+                command::Type::Ban(opts) => self.ban(opts).await,
+                command::Type::LeaveRoom(_) => self.leave_room().await,
+            },
+            cmd_impact,
+        )
     }
 
     async fn has_permission_to(&self, cmd_type: &command::Type) -> bool {

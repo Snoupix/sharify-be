@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::proto::cmd::{command_response, http_command, CommandResponse, HttpCommand};
 use crate::proto::create_error_response;
 use crate::sharify;
-use crate::sharify::room::{CredentialsInput, RoomError, RoomManager};
+use crate::sharify::room::{CredentialsInput, RoomManager};
 use crate::sharify::spotify::Timestamp;
 
 #[get("/")]
@@ -53,11 +53,13 @@ pub async fn proto_command(
                 },
             ) {
                 Ok(room) => room,
-                Err(RoomError { error }) => {
-                    return match create_error_response(error) {
-                        Err(err) => HttpResponse::InternalServerError().body(err),
-                        Ok(buf) => HttpResponse::BadRequest().body(buf),
-                    };
+                Err(error) => {
+                    let proto_cmd: CommandResponse = error.into();
+
+                    let mut buf = Vec::new();
+                    proto_cmd.encode(&mut buf).unwrap();
+
+                    return HttpResponse::BadRequest().body(buf);
                 }
             };
 

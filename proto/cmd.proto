@@ -69,8 +69,7 @@ message Command {
 
 message CommandResponse {
   oneof type {
-    // Useless bool value
-    bool unauthorized = 1;
+    room.RoomError room_error = 1;
     room.Room room = 2;
     string generic_error = 3;
     Kick kick = 4;
