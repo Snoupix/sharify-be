@@ -179,15 +179,15 @@ impl SharifyWsInstance {
             while let Some(Ok(msg)) = stream.recv().await {
                 match msg {
                     AggregatedMessage::Ping(bytes) => {
-                        if let Some(instance) = ws_mgr.write().await.ws_sessions.get_mut(&user_id) {
-                            instance.is_ready = true;
-                        }
-
                         if session.pong(&bytes).await.is_err() {
                             break;
                         }
                     }
                     AggregatedMessage::Pong(_) => {
+                        if let Some(instance) = ws_mgr.write().await.ws_sessions.get_mut(&user_id) {
+                            instance.is_ready = true;
+                        }
+
                         *hb.lock().await = Instant::now();
                     }
                     AggregatedMessage::Text(_) => {}
@@ -330,7 +330,7 @@ impl SharifyWsInstance {
                     break;
                 };
 
-                if instance.is_ready {
+                if !instance.is_ready {
                     continue;
                 }
 
