@@ -11,6 +11,7 @@ use prost::Message as _;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use crate::sharify::room::{RoomError, RoomID, RoomManager, RoomUserID};
+use crate::sharify::spotify::SpotifyError;
 use crate::sharify::utils;
 use crate::sharify::websocket_cmds::{Command as WSCmd, StateImpact};
 use crate::{
@@ -215,6 +216,11 @@ impl SharifyWsInstance {
 
                         drop(ws_guard);
 
+                        let should_room_be_closed = state_mgr
+                            .read()
+                            .await
+                            .is_user_an_owner_and_alone(room_id, &user_id);
+
                         let ws_cmd = WSCmd::new(Arc::clone(&state_mgr), user_id.clone(), room_id);
 
                         let processed_cmd = ws_cmd.process(cmd_type.clone()).await;
@@ -298,6 +304,22 @@ impl SharifyWsInstance {
                                                 buf,
                                             )
                                             .await;
+                                        }
+                                    }
+                                    command::Type::LeaveRoom(_) => {
+                                        if should_room_be_closed.is_ok_and(|b| b) {
+                                            Self::close_room(
+                                                ws_mgr,
+                                                state_mgr,
+                                                room_id,
+                                                Some(
+                                                    "No owner left to manage the room, closing..."
+                                                        .into(),
+                                                ),
+                                            )
+                                            .await;
+
+                                            return;
                                         }
                                     }
                                     _ => {}
@@ -442,6 +464,14 @@ impl SharifyWsInstance {
                             Arc::clone(&state_mgr),
                             room_id
                         ).await.is_err() {
+                            // Most probably expired tokens
+                            Self::close_room(
+                                ws_mgr,
+                                state_mgr,
+                                room_id,
+                                Some("Spotify request error. Closing room...".into()),
+                            ).await;
+
                             break;
                         }
                     }
@@ -457,41 +487,71 @@ impl SharifyWsInstance {
         ws_mgr: Arc<RwLock<SharifyWsManager>>,
         state_mgr: Arc<RwLock<RoomManager>>,
         room_id: RoomID,
-    ) -> Result<(), ()> {
+    ) -> Result<(), SpotifyError> {
+        let mut rate_limit = None;
+
         let mut guard = state_mgr.write().await;
         let Some(room) = guard.get_room_mut(&room_id) else {
-            return Err(());
+            return Err(SpotifyError::Generic("Room not found".into()));
         };
 
-        let (previous, state, next) = tokio::join!(
-            room.spotify_handler.get_recent_tracks(Some(10)),
+        let (state, next, previous) = tokio::join!(
             room.spotify_handler.get_current_playback_state(),
             room.spotify_handler.get_next_tracks(),
+            room.spotify_handler.get_recent_tracks(Some(10)),
         );
 
         if let Err(ref err) = previous {
-            error!("Failed to fetch recent tracks for room {room_id}: {err}");
+            error!(
+                "Failed to fetch recent tracks for room {room_id}: {}",
+                String::from(err.clone())
+            );
+
+            if let SpotifyError::RateLimited(time) = err {
+                rate_limit = Some(time);
+            }
         }
 
         if let Err(ref err) = state {
-            error!("Failed to fetch playback state for room {room_id}: {err}");
+            error!(
+                "Failed to fetch playback state for room {room_id}: {}",
+                String::from(err.clone())
+            );
+
+            if let SpotifyError::RateLimited(time) = err {
+                rate_limit = Some(time);
+            }
         }
 
         if let Err(ref err) = next {
-            error!("Failed to fetch next tracks (queue) for room {room_id}: {err}");
+            error!(
+                "Failed to fetch next tracks (queue) for room {room_id}: {}",
+                String::from(err.clone())
+            );
+
+            if let SpotifyError::RateLimited(time) = err {
+                rate_limit = Some(time);
+            }
         }
 
-        if previous.is_err() || state.is_err() || next.is_err() {
-            // TODO: Destroy Room ? (most probably expired tokens or quota exceeded)
-            return Err(());
+        if let Some(time) = rate_limit {
+            let cmd = CommandResponse {
+                r#type: Some(command_response::Type::SpotifyRateLimited(*time)),
+            };
+
+            let mut buf = Vec::new();
+
+            cmd.encode(&mut buf).unwrap();
+
+            Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
         let cmd = CommandResponse {
             r#type: Some(command_response::Type::SpotifyPlaybackState(
                 command_response::SpotifyPlaybackState {
-                    previous_tracks: Some(previous.unwrap().into()),
-                    state: state.unwrap().map(Into::into),
-                    next_tracks: Some(next.unwrap().into()),
+                    previous_tracks: previous.map(|v| Some(v.into())).unwrap_or_default(),
+                    state: state.map(|v| v.map(Into::into)).unwrap_or_default(),
+                    next_tracks: next.map(|v| Some(v.into())).unwrap_or_default(),
                 },
             )),
         };
@@ -593,5 +653,55 @@ impl SharifyWsInstance {
             .write()
             .await
             .set_ws_user_state(room_id, &user_id, false);
+    }
+
+    async fn close_room(
+        ws_mgr: Arc<RwLock<SharifyWsManager>>,
+        state_mgr: Arc<RwLock<RoomManager>>,
+        room_id: RoomID,
+        reason: Option<String>,
+    ) {
+        let cmd = CommandResponse {
+            r#type: Some(command_response::Type::GenericError(
+                reason.unwrap_or("Internal server error, closing room...".into()),
+            )),
+        };
+
+        let mut buf = Vec::new();
+
+        cmd.encode(&mut buf).unwrap();
+
+        let ws_guard = ws_mgr.read().await;
+
+        let iter = ws_guard
+            .ws_sessions
+            .iter()
+            .filter_map(|(id, instance)| {
+                if instance.room_id == room_id {
+                    Some((id.clone(), instance.session.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        drop(ws_guard);
+
+        let mut ws_guard = ws_mgr.write().await;
+
+        for (room_user_id, mut session) in iter {
+            Self::send_binary(
+                &mut session,
+                &room_user_id,
+                Arc::clone(&ws_mgr),
+                buf.clone(),
+            )
+            .await;
+
+            let _ = session.close(None).await;
+            ws_guard.ws_sessions.remove(&room_user_id);
+        }
+
+        let _ = state_mgr.write().await.delete_room(room_id, None);
     }
 }

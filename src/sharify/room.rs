@@ -661,7 +661,7 @@ impl RoomManager {
     }
 
     /// Returns whether a user is an owner/room manager and if s.he is alone to control the room
-    fn is_user_an_owner_and_alone(
+    pub fn is_user_an_owner_and_alone(
         &self,
         room_id: RoomID,
         user_id: &RoomUserID,

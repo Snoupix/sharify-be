@@ -76,6 +76,7 @@ message CommandResponse {
     Ban ban = 5;
     SpotifyPlaybackState spotify_playback_state = 6;
     spotify.TrackArray spotify_search_result = 7;
+    uint64 spotify_rate_limited = 8;
   }
 
   message Kick {

@@ -183,7 +183,7 @@ impl Commands for Command {
         let tracks = spotify
             .search_track(name)
             .await
-            .map_err(Self::T::GenericError)?;
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(Some(Self::T::SpotifySearchResult(tracks.into())))
     }
@@ -194,7 +194,7 @@ impl Commands for Command {
         spotify
             .add_track_to_queue(track.track_id)
             .await
-            .map_err(Self::T::GenericError)?;
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
@@ -205,7 +205,7 @@ impl Commands for Command {
         spotify
             .set_volume(percentage)
             .await
-            .map_err(Self::T::GenericError)?;
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
@@ -213,7 +213,10 @@ impl Commands for Command {
     async fn play_resume(self) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
-        spotify.play_resume().await.map_err(Self::T::GenericError)?;
+        spotify
+            .play_resume()
+            .await
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
@@ -221,7 +224,10 @@ impl Commands for Command {
     async fn pause(self) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
-        spotify.pause().await.map_err(Self::T::GenericError)?;
+        spotify
+            .pause()
+            .await
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
@@ -229,7 +235,10 @@ impl Commands for Command {
     async fn skip_next(self) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
-        spotify.skip_next().await.map_err(Self::T::GenericError)?;
+        spotify
+            .skip_next()
+            .await
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
@@ -240,7 +249,7 @@ impl Commands for Command {
         spotify
             .skip_previous()
             .await
-            .map_err(Self::T::GenericError)?;
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
@@ -251,7 +260,7 @@ impl Commands for Command {
         spotify
             .seek_to_ms(pos)
             .await
-            .map_err(Self::T::GenericError)?;
+            .map_err(|err| Self::T::GenericError(err.into()))?;
 
         Ok(None)
     }
