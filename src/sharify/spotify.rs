@@ -79,7 +79,7 @@ impl RateLimiter {
         }
 
         if self.request_count_on_window.fetch_add(1, Ordering::Acquire) + 1
-            == REQUEST_COUNT_PER_WINDOW
+            >= REQUEST_COUNT_PER_WINDOW
         {
             return Err(SpotifyError::RateLimited(
                 RATE_LIMIT_REQUEST_WINDOW.as_secs() - elapsed_since_window.as_secs(),

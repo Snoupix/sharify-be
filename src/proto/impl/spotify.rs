@@ -1,5 +1,15 @@
 use crate::proto;
+use crate::sharify::spotify;
 use crate::sharify::spotify_web_utils;
+
+impl From<spotify::SpotifyError> for proto::cmd::command_response::Type {
+    fn from(err: spotify::SpotifyError) -> Self {
+        match err {
+            spotify::SpotifyError::Generic(error) => Self::GenericError(error),
+            spotify::SpotifyError::RateLimited(time) => Self::SpotifyRateLimited(time),
+        }
+    }
+}
 
 impl From<spotify_web_utils::SpotifyCurrentPlaybackOutput> for proto::spotify::PlaybackState {
     fn from(state: spotify_web_utils::SpotifyCurrentPlaybackOutput) -> Self {

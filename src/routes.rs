@@ -105,6 +105,44 @@ pub async fn proto_command(
 
             HttpResponse::Ok().body(buf)
         }
+        http_command::Type::JoinRoom(http_command::JoinRoom {
+            room_id,
+            user_id,
+            username,
+        }) => {
+            let mut state_guard = sharify_state.write().await;
+            let Ok(uuid) = Uuid::from_slice(&room_id[..16]) else {
+                return match create_error_response("Wrong UUID format") {
+                    Err(err) => HttpResponse::InternalServerError().body(err),
+                    Ok(buf) => HttpResponse::BadRequest().body(buf),
+                };
+            };
+            let room = match state_guard.join_room(uuid, username, user_id) {
+                Ok(room) => room,
+                Err(err) => {
+                    let mut buf = Vec::new();
+
+                    CommandResponse::from(err).encode(&mut buf).unwrap();
+
+                    return HttpResponse::Unauthorized().body(buf);
+                }
+            };
+
+            drop(state_guard);
+
+            let proto_command = CommandResponse {
+                r#type: Some(command_response::Type::Room(room.into())),
+            };
+
+            let mut buf = Vec::new();
+            if let Err(err) = proto_command.encode(&mut buf) {
+                return HttpResponse::InternalServerError().body(format!(
+                    "Unexpected error while encoding newly created Room to protobuf command: {err}"
+                ));
+            }
+
+            HttpResponse::Ok().body(buf)
+        }
         _ => HttpResponse::ServiceUnavailable()
             .body("Unreachable error: POST command unhandled or missing command parts"),
     }

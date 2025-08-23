@@ -10,10 +10,13 @@ use actix_ws::{AggregatedMessage, AggregatedMessageStream, CloseReason, Session}
 use prost::Message as _;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
-use crate::sharify::room::{RoomError, RoomID, RoomManager, RoomUserID};
 use crate::sharify::spotify::SpotifyError;
 use crate::sharify::utils;
 use crate::sharify::websocket_cmds::{Command as WSCmd, StateImpact};
+use crate::sharify::{
+    room::{RoomError, RoomID, RoomManager, RoomUserID},
+    utils::decode_user_email,
+};
 use crate::{
     proto::cmd::{command, command_response, Command, CommandResponse},
     sharify::room::INACTIVE_ROOM_MINS,
@@ -95,7 +98,7 @@ impl SharifyWsInstance {
         }
 
         debug!(
-            "WS Debug: Starting ws session for roomID {} and userID {}",
+            "[WS] Starting ws session for roomID {} and userID {}",
             room_id, user_id
         );
 
@@ -150,8 +153,10 @@ impl SharifyWsInstance {
 
                 if Instant::now().duration_since(*hb.lock().await) > USER_WS_TIMEOUT {
                     debug!(
-                        "[id:{}, room_id:{}] Disconnecting failed heartbeat",
-                        user_id, room_id
+                        "[WS] Disconnecting failed heartbeat email:{}, id:{}, room_id:{}",
+                        decode_user_email(&user_id),
+                        user_id,
+                        room_id
                     );
                     break;
                 }
@@ -640,6 +645,12 @@ impl SharifyWsInstance {
         user_id: RoomUserID,
         reason: Option<CloseReason>,
     ) {
+        debug!(
+            "[WS] Closing session email:{}, id:{}",
+            decode_user_email(&user_id),
+            user_id,
+        );
+
         let Some(SharifyWsInstance {
             session, room_id, ..
         }) = ws_mgr.write().await.ws_sessions.remove(&user_id)

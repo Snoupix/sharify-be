@@ -9,6 +9,7 @@ message HttpCommand {
   oneof type {
     CreateRoom create_room = 1;
     GetRoom get_room = 2;
+    JoinRoom join_room = 3;
   }
 
   message CreateRoom {
@@ -27,6 +28,12 @@ message HttpCommand {
     string refresh_token = 2;
     string expires_in = 3;
     string created_at = 4;
+  }
+
+  message JoinRoom {
+    bytes room_id = 1;
+    string user_id = 2;
+    string username = 3;
   }
 }
 

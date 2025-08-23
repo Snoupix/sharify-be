@@ -153,8 +153,8 @@ impl Command {
 
         let room = guard
             .get_room(&self.room_id)
-            .ok_or(command_response::Type::GenericError(
-                "Room not found".into(),
+            .ok_or(command_response::Type::RoomError(
+                RoomError::RoomNotFound.into(),
             ))?;
 
         Ok(room.spotify_handler.clone())
@@ -171,7 +171,7 @@ impl Commands for Command {
 
         let room = guard
             .get_room(&self.room_id)
-            .ok_or(Self::T::GenericError("Room not found".into()))?
+            .ok_or(Self::T::RoomError(RoomError::RoomNotFound.into()))?
             .clone();
 
         Ok(Some(Self::T::Room(room.into())))
@@ -183,7 +183,7 @@ impl Commands for Command {
         let tracks = spotify
             .search_track(name)
             .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+            .map_err(Into::<Self::T>::into)?;
 
         Ok(Some(Self::T::SpotifySearchResult(tracks.into())))
     }
@@ -194,7 +194,7 @@ impl Commands for Command {
         spotify
             .add_track_to_queue(track.track_id)
             .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+            .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
@@ -205,7 +205,7 @@ impl Commands for Command {
         spotify
             .set_volume(percentage)
             .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+            .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
@@ -213,10 +213,7 @@ impl Commands for Command {
     async fn play_resume(self) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
-        spotify
-            .play_resume()
-            .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+        spotify.play_resume().await.map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
@@ -224,10 +221,7 @@ impl Commands for Command {
     async fn pause(self) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
-        spotify
-            .pause()
-            .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+        spotify.pause().await.map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
@@ -235,10 +229,7 @@ impl Commands for Command {
     async fn skip_next(self) -> Self::Output {
         let spotify = self.get_spotify_handler().await?;
 
-        spotify
-            .skip_next()
-            .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+        spotify.skip_next().await.map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
@@ -249,7 +240,7 @@ impl Commands for Command {
         spotify
             .skip_previous()
             .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+            .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
@@ -260,7 +251,7 @@ impl Commands for Command {
         spotify
             .seek_to_ms(pos)
             .await
-            .map_err(|err| Self::T::GenericError(err.into()))?;
+            .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
     }
