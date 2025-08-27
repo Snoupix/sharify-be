@@ -471,7 +471,8 @@ impl RoomManager {
             Some(role) => role,
             None => {
                 let guest = Role::new_guest();
-                room.role_manager
+                let _ = room
+                    .role_manager
                     .add_role(guest.name.clone(), guest.permissions);
 
                 guest

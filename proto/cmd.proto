@@ -3,6 +3,7 @@ syntax = "proto3";
 package cmd;
 
 import "spotify.proto";
+import "role.proto";
 import "room.proto";
 
 message HttpCommand {
@@ -57,6 +58,7 @@ message Command {
     Ban ban = 11;
     // Useless bool value
     bool leave_room = 12;
+    CreateRole create_role = 13;
   }
 
   message Kick {
@@ -72,6 +74,11 @@ message Command {
   message AddTrackToQueue {
     string track_id = 1;
   }
+
+  message CreateRole {
+    string name = 1;
+    role.RolePermission permissions = 2;
+  }
 }
 
 message CommandResponse {
@@ -84,6 +91,7 @@ message CommandResponse {
     SpotifyPlaybackState spotify_playback_state = 6;
     spotify.TrackArray spotify_search_result = 7;
     uint64 spotify_rate_limited = 8;
+    role.RoleError role_error = 9;
   }
 
   message Kick {

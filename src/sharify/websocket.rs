@@ -10,13 +10,10 @@ use actix_ws::{AggregatedMessage, AggregatedMessageStream, CloseReason, Session}
 use prost::Message as _;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
+use crate::sharify::room::{RoomError, RoomID, RoomManager, RoomUserID};
 use crate::sharify::spotify::SpotifyError;
 use crate::sharify::utils;
 use crate::sharify::websocket_cmds::{Command as WSCmd, StateImpact};
-use crate::sharify::{
-    room::{RoomError, RoomID, RoomManager, RoomUserID},
-    utils::decode_user_email,
-};
 use crate::{
     proto::cmd::{command, command_response, Command, CommandResponse},
     sharify::room::INACTIVE_ROOM_MINS,
@@ -25,13 +22,12 @@ use crate::{
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const USER_WS_TIMEOUT: Duration = Duration::from_secs(HEARTBEAT_INTERVAL.as_secs() * 2);
 
-#[derive(Clone)]
 pub struct SharifyWsInstance {
     session: Session,
     room_id: RoomID,
     hb: Arc<Mutex<Instant>>,
-    // This is true when the Client sent its first ping
-    // so the instance can recieve its initial data
+    // This is true when the Client responded at the first ping
+    // sent so the instance can recieve its initial data
     is_ready: bool,
 }
 
@@ -86,8 +82,8 @@ impl SharifyWsInstance {
             return Ok(HttpResponse::Unauthorized().finish());
         }
 
-        if let Some(Self { session, .. }) = ws_mgr.write().await.ws_sessions.remove(&user_id) {
-            let _ = session.close(None).await;
+        if let Some(instance) = ws_mgr.write().await.ws_sessions.remove(&user_id) {
+            let _ = instance.session.close(None).await;
         }
 
         drop(state_guard);
@@ -103,16 +99,10 @@ impl SharifyWsInstance {
         );
 
         let (res, session, stream) = actix_ws::handle(&req, body)?;
-        let _self = Self::new(room_id, session.clone());
+        let _self = Self::new(room_id, session);
 
         // max 128kb stream
         let stream = stream.max_frame_size(1024 * 128).aggregate_continuations();
-
-        ws_mgr
-            .write()
-            .await
-            .ws_sessions
-            .insert(user_id.clone(), _self.clone());
 
         // WS Instance scoped thread(s)
         _self.init_heartbeat(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), user_id.clone());
@@ -132,6 +122,8 @@ impl SharifyWsInstance {
 
             _self.init_room_activity_check_loop(Arc::clone(&state_mgr));
         }
+
+        ws_mgr.write().await.ws_sessions.insert(user_id, _self);
 
         Ok(res)
     }
@@ -154,7 +146,7 @@ impl SharifyWsInstance {
                 if Instant::now().duration_since(*hb.lock().await) > USER_WS_TIMEOUT {
                     debug!(
                         "[WS] Disconnecting failed heartbeat email:{}, id:{}, room_id:{}",
-                        decode_user_email(&user_id),
+                        utils::decode_user_email(&user_id),
                         user_id,
                         room_id
                     );
@@ -213,10 +205,12 @@ impl SharifyWsInstance {
                         };
 
                         let ws_guard = ws_mgr.read().await;
-                        let Some(SharifyWsInstance { session, .. }) =
-                            ws_guard.ws_sessions.get(&user_id).cloned()
+                        let Some(mut session) = ws_guard
+                            .ws_sessions
+                            .get(&user_id)
+                            .map(|instance| instance.session.clone())
                         else {
-                            continue;
+                            break;
                         };
 
                         drop(ws_guard);
@@ -269,7 +263,7 @@ impl SharifyWsInstance {
                                 response.encode(&mut buf);
 
                                 if !Self::send_binary(
-                                    &mut session.clone(),
+                                    &mut session,
                                     &user_id,
                                     Arc::clone(&ws_mgr),
                                     buf,
@@ -351,33 +345,35 @@ impl SharifyWsInstance {
             loop {
                 interval.tick().await;
 
-                let Some(mut instance) = ws_mgr.read().await.ws_sessions.get(&user_id).cloned()
-                else {
-                    // Reachable if the client is dropped instantly
-                    break;
-                };
+                let (mut session, room_id) = {
+                    let ws_guard = ws_mgr.read().await;
+                    let Some(instance) = ws_guard.ws_sessions.get(&user_id) else {
+                        // Reachable if the client is dropped instantly
+                        break;
+                    };
 
-                if !instance.is_ready {
-                    continue;
-                }
+                    if !instance.is_ready {
+                        continue;
+                    }
+
+                    (instance.session.clone(), instance.room_id)
+                };
 
                 let mut buf = Vec::new();
 
                 let cmd = CommandResponse {
-                    r#type: Some(
-                        match state_mgr.read().await.get_room(&instance.room_id).cloned() {
-                            None => command_response::Type::RoomError(
-                                // TODO Unreachable ?
-                                RoomError::RoomNotFound.into(),
-                            ),
-                            Some(room) => command_response::Type::Room(room.into()),
-                        },
-                    ),
+                    r#type: Some(match state_mgr.read().await.get_room(&room_id).cloned() {
+                        None => command_response::Type::RoomError(
+                            // TODO Unreachable ?
+                            RoomError::RoomNotFound.into(),
+                        ),
+                        Some(room) => command_response::Type::Room(room.into()),
+                    }),
                 };
 
                 cmd.encode(&mut buf).unwrap();
 
-                Self::send_binary(&mut instance.session, &user_id, Arc::clone(&ws_mgr), buf).await;
+                Self::send_binary(&mut session, &user_id, Arc::clone(&ws_mgr), buf).await;
                 break;
             }
         });
@@ -620,15 +616,21 @@ impl SharifyWsInstance {
     ) {
         let ws_guard = ws_mgr.read().await;
 
-        for (room_user_id, mut session) in
-            ws_guard.ws_sessions.iter().filter_map(|(id, instance)| {
+        let room_users = ws_guard
+            .ws_sessions
+            .iter()
+            .filter_map(|(id, instance)| {
                 if instance.room_id == room_id {
                     Some((id.clone(), instance.session.clone()))
                 } else {
                     None
                 }
             })
-        {
+            .collect::<Vec<_>>();
+
+        drop(ws_guard);
+
+        for (room_user_id, mut session) in room_users {
             Self::send_binary(
                 &mut session,
                 &room_user_id,
@@ -647,18 +649,20 @@ impl SharifyWsInstance {
     ) {
         debug!(
             "[WS] Closing session email:{}, id:{}",
-            decode_user_email(&user_id),
+            utils::decode_user_email(&user_id),
             user_id,
         );
 
         let Some(SharifyWsInstance {
-            session, room_id, ..
+            ref session,
+            room_id,
+            ..
         }) = ws_mgr.write().await.ws_sessions.remove(&user_id)
         else {
             return;
         };
 
-        let _ = session.close(reason).await;
+        let _ = session.clone().close(reason).await;
 
         let _ = state_mgr
             .write()
@@ -684,7 +688,7 @@ impl SharifyWsInstance {
 
         let ws_guard = ws_mgr.read().await;
 
-        let iter = ws_guard
+        let room_users = ws_guard
             .ws_sessions
             .iter()
             .filter_map(|(id, instance)| {
@@ -700,7 +704,7 @@ impl SharifyWsInstance {
 
         let mut ws_guard = ws_mgr.write().await;
 
-        for (room_user_id, mut session) in iter {
+        for (room_user_id, mut session) in room_users {
             Self::send_binary(
                 &mut session,
                 &room_user_id,

@@ -3,6 +3,14 @@ name = "sharify-be"
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+debug = false
+
 [dependencies]
 actix = "0.13.5"
 actix-cors = "0.7.1"

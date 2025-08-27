@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub enum RoleError {
+    NameAlreadyExists,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Role hierarchy is: Most powerful role first, then lower, then lower...
 pub struct RoleManager(Vec<Role>);
@@ -14,9 +18,9 @@ impl RoleManager {
         Self(roles)
     }
 
-    pub fn add_role(&mut self, name: String, permissions: RolePermission) -> bool {
+    pub fn add_role(&mut self, name: String, permissions: RolePermission) -> Result<(), RoleError> {
         if self.0.iter().any(|role| role.name == name) {
-            return false;
+            return Err(RoleError::NameAlreadyExists);
         }
 
         self.0.push(Role {
@@ -25,7 +29,7 @@ impl RoleManager {
             permissions,
         });
 
-        true
+        Ok(())
     }
 
     pub fn remove_role(&mut self, id: Uuid) {

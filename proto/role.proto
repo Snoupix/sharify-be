@@ -23,3 +23,7 @@ message Role {
 message RoleManager {
   repeated Role roles = 1;
 }
+
+enum RoleError {
+    NAME_ALREADY_EXISTS = 0;
+}

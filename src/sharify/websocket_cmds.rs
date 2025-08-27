@@ -33,6 +33,7 @@ trait Commands {
     async fn kick(self, opts: command::Kick) -> Self::Output;
     async fn ban(self, opts: command::Ban) -> Self::Output;
     async fn leave_room(self) -> Self::Output;
+    async fn create_role(self, opts: command::CreateRole) -> Self::Output;
 }
 
 pub struct Command {
@@ -83,6 +84,7 @@ impl Command {
         }
 
         let cmd_impact = match &cmd_type {
+            command::Type::CreateRole(_) => StateImpact::Nothing,
             command::Type::GetRoom(_) | command::Type::Search(_) => StateImpact::Nothing,
             command::Type::LeaveRoom(_) | command::Type::Kick(_) | command::Type::Ban(_) => {
                 StateImpact::Room
@@ -110,6 +112,7 @@ impl Command {
                 command::Type::Kick(opts) => self.kick(opts).await,
                 command::Type::Ban(opts) => self.ban(opts).await,
                 command::Type::LeaveRoom(_) => self.leave_room().await,
+                command::Type::CreateRole(opts) => self.create_role(opts).await,
             },
             cmd_impact,
         )
@@ -132,6 +135,7 @@ impl Command {
         let Some(role) = room.role_manager.get_role_by_id(&user_role_id) else {
             return false;
         };
+
         let perms = role.permissions;
         drop(guard);
 
@@ -145,6 +149,7 @@ impl Command {
             | command::Type::SkipPrevious(_)
             | command::Type::SeekToPos(_) => perms.can_use_controls,
             command::Type::Kick(_) | command::Type::Ban(_) => perms.can_manage_users,
+            command::Type::CreateRole(_) => perms.can_manage_users && perms.can_add_moderator,
         }
     }
 
@@ -284,5 +289,26 @@ impl Commands for Command {
             .map_err(Into::<Self::T>::into)?;
 
         Ok(None)
+    }
+
+    async fn create_role(self, opts: command::CreateRole) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
+
+        let room = guard
+            .get_room_mut(&self.room_id)
+            .ok_or(Self::T::RoomError(RoomError::RoomNotFound.into()))?;
+
+        room.role_manager
+            .add_role(
+                opts.name,
+                opts.permissions
+                    .ok_or(Self::T::GenericError(
+                        "Permissions missing from request".into(),
+                    ))?
+                    .into(),
+            )
+            .map_err(Into::<Self::T>::into)?;
+
+        Ok(Some(Self::T::Room(room.clone().into())))
     }
 }

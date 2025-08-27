@@ -28,7 +28,7 @@ fn main() -> std::io::Result<()> {
             .args(&[
                 format!("--plugin={}", PROTOC_TS_PLUGIN),
                 format!("--ts_proto_out={}", PROTO_TS_OUT),
-                "-I=proto/".into(),
+                format!("-I={}", PROTO_DIR),
                 file,
             ])
             .stderr(Stdio::piped())

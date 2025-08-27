@@ -3,6 +3,36 @@ use uuid::Uuid;
 use crate::proto;
 use crate::sharify::role;
 
+impl From<role::RoleError> for i32 {
+    fn from(err: role::RoleError) -> Self {
+        match err {
+            role::RoleError::NameAlreadyExists => 0,
+        }
+    }
+}
+
+impl From<role::RoleError> for proto::cmd::command_response::Type {
+    fn from(err: role::RoleError) -> Self {
+        Self::RoleError(err.into())
+    }
+}
+
+impl From<proto::role::RoleError> for role::RoleError {
+    fn from(err: proto::role::RoleError) -> Self {
+        match err {
+            proto::role::RoleError::NameAlreadyExists => Self::NameAlreadyExists,
+        }
+    }
+}
+
+impl From<role::RoleError> for proto::role::RoleError {
+    fn from(err: role::RoleError) -> Self {
+        match err {
+            role::RoleError::NameAlreadyExists => Self::NameAlreadyExists,
+        }
+    }
+}
+
 impl From<proto::role::RolePermission> for role::RolePermission {
     fn from(perm: proto::role::RolePermission) -> Self {
         Self {
