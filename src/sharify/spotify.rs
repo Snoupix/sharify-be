@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, MappedLocalTime, TimeZone as _, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use urlencoding::encode as encode_url;
@@ -22,6 +23,14 @@ pub struct Timestamp(String);
 impl Timestamp {
     pub fn new(t: String) -> Self {
         Self(t)
+    }
+
+    pub fn to_datetime(&self) -> MappedLocalTime<DateTime<Utc>> {
+        let timestamp: i64 = self.clone().into();
+        let secs = timestamp / 1000;
+        let nsecs = (timestamp % 1000) * 1_000_000;
+
+        Utc.timestamp_opt(secs, nsecs as _)
     }
 }
 
@@ -94,7 +103,8 @@ impl RateLimiter {
 pub struct SpotifyTokens {
     pub access_token: String,
     pub refresh_token: String,
-    pub expires_in: Timestamp,
+    /// In seconds - offset from created_at
+    pub expires_in: u32,
     pub created_at: Timestamp,
 }
 
@@ -149,7 +159,7 @@ impl Spotify {
         self.tokens = SpotifyTokens {
             access_token: body.access_token,
             refresh_token: body.refresh_token,
-            expires_in: Timestamp::from(body.expires_in),
+            expires_in: body.expires_in as _,
             created_at: Timestamp::from(chrono::Local::now().timestamp()),
         };
 

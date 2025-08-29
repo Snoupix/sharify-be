@@ -31,11 +31,7 @@ async fn run_server_with_timeout(seconds: u64, mut cancel_rx: mpsc::Receiver<()>
     });
 
     // Await for server start
-    for i in 0..4 {
-        if i == 3 {
-            panic!("Server unreachable");
-        }
-
+    for _ in 0..4 {
         if Client::default()
             .get(BASE_URL)
             .timeout(Duration::from_millis(1000))
@@ -43,9 +39,11 @@ async fn run_server_with_timeout(seconds: u64, mut cancel_rx: mpsc::Receiver<()>
             .await
             .is_ok()
         {
-            break;
+            return;
         }
     }
+
+    panic!("Server unreachable");
 }
 
 async fn create_room_impl(sv_timeout: u64) -> (mpsc::Sender<()>, Client, Room) {

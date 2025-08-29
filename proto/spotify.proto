@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+import "google/protobuf/timestamp.proto";
+
 package spotify;
 
 message Track {
@@ -24,4 +26,12 @@ message PlaybackState {
     string track_name = 8;
     string artist_name = 9;
     string album_image_src = 10;
+}
+
+message SpotifyTokens {
+  string access_token = 1;
+  string refresh_token = 2;
+  /// In seconds - offset from created_at
+  uint32 expires_in = 3;
+  google.protobuf.Timestamp created_at = 4;
 }

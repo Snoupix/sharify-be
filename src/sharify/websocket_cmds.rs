@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::proto::cmd::command;
 use crate::proto::cmd::command_response;
@@ -34,6 +35,7 @@ trait Commands {
     async fn ban(self, opts: command::Ban) -> Self::Output;
     async fn leave_room(self) -> Self::Output;
     async fn create_role(self, opts: command::CreateRole) -> Self::Output;
+    async fn rename_role(self, opts: command::RenameRole) -> Self::Output;
 }
 
 pub struct Command {
@@ -84,11 +86,12 @@ impl Command {
         }
 
         let cmd_impact = match &cmd_type {
-            command::Type::CreateRole(_) => StateImpact::Nothing,
             command::Type::GetRoom(_) | command::Type::Search(_) => StateImpact::Nothing,
-            command::Type::LeaveRoom(_) | command::Type::Kick(_) | command::Type::Ban(_) => {
-                StateImpact::Room
-            }
+            command::Type::CreateRole(_)
+            | command::Type::RenameRole(_)
+            | command::Type::LeaveRoom(_)
+            | command::Type::Kick(_)
+            | command::Type::Ban(_) => StateImpact::Room,
             command::Type::AddToQueue(_)
             | command::Type::SetVolume(_)
             | command::Type::PlayResume(_)
@@ -113,6 +116,7 @@ impl Command {
                 command::Type::Ban(opts) => self.ban(opts).await,
                 command::Type::LeaveRoom(_) => self.leave_room().await,
                 command::Type::CreateRole(opts) => self.create_role(opts).await,
+                command::Type::RenameRole(opts) => self.rename_role(opts).await,
             },
             cmd_impact,
         )
@@ -137,6 +141,20 @@ impl Command {
         };
 
         let perms = role.permissions;
+
+        if let command::Type::RenameRole(opts) = cmd_type {
+            let Ok(role_id) = Uuid::from_slice(&opts.role_id[..16]) else {
+                return false;
+            };
+            let Some(target_role) = room.role_manager.get_role_by_id(&role_id) else {
+                return false;
+            };
+
+            if target_role >= role {
+                return false;
+            }
+        }
+
         drop(guard);
 
         match *cmd_type {
@@ -149,7 +167,9 @@ impl Command {
             | command::Type::SkipPrevious(_)
             | command::Type::SeekToPos(_) => perms.can_use_controls,
             command::Type::Kick(_) | command::Type::Ban(_) => perms.can_manage_users,
-            command::Type::CreateRole(_) => perms.can_manage_users && perms.can_add_moderator,
+            command::Type::CreateRole(_) | command::Type::RenameRole(_) => {
+                perms.can_manage_users && perms.can_add_moderator
+            }
         }
     }
 
@@ -309,6 +329,27 @@ impl Commands for Command {
             )
             .map_err(Into::<Self::T>::into)?;
 
-        Ok(Some(Self::T::Room(room.clone().into())))
+        Ok(None)
+    }
+
+    async fn rename_role(self, opts: command::RenameRole) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
+
+        let room = guard
+            .get_room_mut(&self.room_id)
+            .ok_or(Self::T::RoomError(RoomError::RoomNotFound.into()))?;
+
+        let role_id = Uuid::from_slice(&opts.role_id[..16])
+            .map_err(|err| Self::T::GenericError(format!("Failed to read role_id {err}")))?;
+
+        let role = room
+            .role_manager
+            .get_role_by_id(&role_id)
+            .ok_or(Self::T::RoomError(RoomError::RoleNotFound.into()))?;
+
+        room.role_manager
+            .edit_role(role_id, opts.name, role.permissions);
+
+        Ok(None)
     }
 }

@@ -27,7 +27,7 @@ message HttpCommand {
   message Credentials {
     string access_token = 1;
     string refresh_token = 2;
-    string expires_in = 3;
+    uint32 expires_in = 3;
     string created_at = 4;
   }
 
@@ -59,6 +59,7 @@ message Command {
     // Useless bool value
     bool leave_room = 12;
     CreateRole create_role = 13;
+    RenameRole rename_role = 14;
   }
 
   message Kick {
@@ -78,6 +79,11 @@ message Command {
   message CreateRole {
     string name = 1;
     role.RolePermission permissions = 2;
+  }
+
+  message RenameRole {
+    bytes role_id = 1;
+    string name = 2;
   }
 }
 

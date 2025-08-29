@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use actix_web::web;
-use actix_web::{get, post, HttpResponse, Responder};
+use actix_web::{get, post, web, HttpResponse, Responder};
 use prost::Message as _;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -48,7 +47,7 @@ pub async fn proto_command(
                 CredentialsInput {
                     access_token: credentials.access_token,
                     refresh_token: credentials.refresh_token,
-                    expires_in: Timestamp::new(credentials.expires_in),
+                    expires_in: credentials.expires_in,
                     created_at: Timestamp::new(credentials.created_at),
                 },
             ) {

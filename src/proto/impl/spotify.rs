@@ -2,6 +2,14 @@ use crate::proto;
 use crate::sharify::spotify;
 use crate::sharify::spotify_web_utils;
 
+impl From<spotify::SpotifyError> for proto::cmd::CommandResponse {
+    fn from(err: spotify::SpotifyError) -> Self {
+        Self {
+            r#type: Some(err.into()),
+        }
+    }
+}
+
 impl From<spotify::SpotifyError> for proto::cmd::command_response::Type {
     fn from(err: spotify::SpotifyError) -> Self {
         match err {

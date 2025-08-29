@@ -71,7 +71,7 @@ impl Log {
 pub struct CredentialsInput {
     pub access_token: String,
     pub refresh_token: String,
-    pub expires_in: Timestamp,
+    pub expires_in: u32,
     pub created_at: Timestamp,
 }
 

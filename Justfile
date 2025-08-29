@@ -1,9 +1,16 @@
+# https://just.systems/man/en/
+
 @build:
     cargo build
     cp -R proto_ts/* ../sharify/src/lib/proto
 
 @run *flags:
     cargo run {{flags}}
+
+# This is needed to gracefully shutdown actix, a CTRL-C (or SIGINT) will force shutdown
+[doc]
+@stop:
+    kill -s TERM $(pgrep sharify-be)
 
 @test:
     cargo test -- --nocapture
@@ -13,7 +20,7 @@
 
 @clean_proto:
     find src/proto -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' -exec rm {} \+
-    rm -rf proto_ts/*
+    rm -rf proto_ts/* ../sharify/src/lib/proto/*
 
 @clean: clean_proto
     cargo clean

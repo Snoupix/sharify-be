@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -182,5 +184,39 @@ impl Default for RoleManager {
             Role::new_vip(),
             Role::new_guest(),
         ]))
+    }
+}
+
+impl From<&Role> for u8 {
+    fn from(role: &Role) -> Self {
+        let mut i = 0;
+
+        i += (role.permissions.can_add_song as u8) * 1;
+        i += (role.permissions.can_use_controls as u8) * 2;
+        i += (role.permissions.can_manage_users as u8) * 3;
+        i += (role.permissions.can_add_moderator as u8) * 4;
+        i += (role.permissions.can_manage_room as u8) * 5;
+
+        i
+    }
+}
+
+impl Eq for Role {}
+
+impl PartialEq for Role {
+    fn eq(&self, other: &Self) -> bool {
+        u8::from(self) == u8::from(other)
+    }
+}
+
+impl Ord for Role {
+    fn cmp(&self, other: &Self) -> Ordering {
+        u8::from(self).cmp(&other.into())
+    }
+}
+
+impl PartialOrd for Role {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(u8::from(self).cmp(&u8::from(other)))
     }
 }
