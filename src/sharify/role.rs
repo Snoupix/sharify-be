@@ -31,6 +31,8 @@ impl RoleManager {
             permissions,
         });
 
+        self.sort();
+
         Ok(())
     }
 
@@ -72,6 +74,11 @@ impl RoleManager {
 
     pub fn into_inner(self) -> Vec<Role> {
         self.0
+    }
+
+    fn sort(&mut self) {
+        self.0.sort();
+        self.0.reverse();
     }
 }
 
@@ -163,7 +170,7 @@ impl Role {
     pub fn new_owner() -> Self {
         Self {
             id: Uuid::now_v7(),
-            name: "Admin".into(),
+            name: "Owner".into(),
             permissions: RolePermission {
                 can_use_controls: true,
                 can_manage_users: true,
@@ -187,17 +194,15 @@ impl Default for RoleManager {
     }
 }
 
+// Get rid of the warning for the * 1 which is nice for consistency
+#[allow(clippy::identity_op)]
 impl From<&Role> for u8 {
     fn from(role: &Role) -> Self {
-        let mut i = 0;
-
-        i += (role.permissions.can_add_song as u8) * 1;
-        i += (role.permissions.can_use_controls as u8) * 2;
-        i += (role.permissions.can_manage_users as u8) * 3;
-        i += (role.permissions.can_add_moderator as u8) * 4;
-        i += (role.permissions.can_manage_room as u8) * 5;
-
-        i
+        (role.permissions.can_add_song as u8) * 1
+            + (role.permissions.can_use_controls as u8) * 2
+            + (role.permissions.can_manage_users as u8) * 3
+            + (role.permissions.can_add_moderator as u8) * 4
+            + (role.permissions.can_manage_room as u8) * 5
     }
 }
 
@@ -217,6 +222,6 @@ impl Ord for Role {
 
 impl PartialOrd for Role {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(u8::from(self).cmp(&u8::from(other)))
+        Some(self.cmp(other))
     }
 }

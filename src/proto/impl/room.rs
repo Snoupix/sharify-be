@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use uuid::Uuid;
 
 use crate::proto;
@@ -135,7 +133,6 @@ impl From<proto::room::RoomTrack> for room::RoomTrack {
             track_id: track.track_id,
             track_name: track.track_name,
             track_duration: track.track_duration,
-            last_checked: Instant::now(),
         }
     }
 }

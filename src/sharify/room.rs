@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
-use actix_web::cookie::time::{ext::InstantExt, Duration};
 use rand::distr::Alphanumeric;
 use rand::{rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -14,6 +13,7 @@ use super::utils::decode_user_email;
 
 const MAX_USERS: usize = 15;
 const MAX_LOGS_LEN: usize = 25;
+const MAX_TRACKS_QUEUE_LEN: usize = 50;
 pub const INACTIVE_ROOM_MINS: u32 = 5;
 
 // email / uuid allowed chars
@@ -33,7 +33,7 @@ pub struct Room {
     /// Role hierarchy is: Most powerful role first, then less powerfull, then less...
     pub role_manager: RoleManager,
     // pub current_device: Option<SpotifyApi.UserDevice>,
-    pub tracks_queue: Vec<RoomTrack>,
+    pub tracks_queue: VecDeque<RoomTrack>,
     pub max_users: usize,
     // TODO: Add log on every action
     /// Last 25 logs: Ban, Kick, Song added... (25 for memory purposes)
@@ -93,8 +93,6 @@ pub struct RoomTrack {
     pub track_id: String,
     pub track_name: String,
     pub track_duration: u32,
-    #[serde(skip)]
-    pub last_checked: Instant,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -165,7 +163,7 @@ impl RoomManager {
                     .collect::<String>(),
                 logs: VecDeque::with_capacity(MAX_LOGS_LEN),
                 banned_users: Vec::new(),
-                tracks_queue: Vec::new(),
+                tracks_queue: VecDeque::with_capacity(MAX_TRACKS_QUEUE_LEN),
                 max_users: MAX_USERS,
                 spotify_handler: Spotify::new(creds.into()),
                 inactive_for: None,
@@ -309,12 +307,11 @@ impl RoomManager {
             .find(|c| c.id == user_id)
             .ok_or(RoomError::RoomUserNotFound)?;
 
-        room.tracks_queue.push(RoomTrack {
+        room.tracks_queue.push_back(RoomTrack {
             track_id,
             user_id,
             track_name: track_name.clone(),
             track_duration,
-            last_checked: Instant::now(),
         });
 
         debug!(
@@ -325,6 +322,7 @@ impl RoomManager {
         Ok(())
     }
 
+    /// Sort of fail-free fn that can be ran each time Spotify current playback is fetched
     pub fn remove_track_from_queue(
         &mut self,
         id: RoomID,
@@ -332,30 +330,21 @@ impl RoomManager {
     ) -> Result<(), RoomError> {
         let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
 
-        if let Some(idx) = room
+        if room
             .tracks_queue
-            .iter()
-            .position(|track| track.track_id == track_id)
+            .front()
+            .is_some_and(|t| t.track_id == track_id)
         {
-            let track = room.tracks_queue.get(idx).unwrap();
+            let track = room.tracks_queue.pop_front();
 
-            // FIXME: Wtf was the logic behind that
-            if track
-                .last_checked
-                .add_signed(Duration::new((track.track_duration / 2) as i64 / 1000, 0))
-                > Instant::now()
-            {
-                debug!(
-                    "Removed track {} from room ID's {} queue",
-                    track.track_name, room.id
-                );
-                room.tracks_queue.remove(idx);
-            }
-
-            return Ok(());
+            debug!(
+                "Removed track {:?} from room ID {} queue",
+                track.map(|t| t.track_name),
+                room.id
+            );
         }
 
-        Err(RoomError::TrackNotFound)
+        Ok(())
     }
 
     pub fn kick_user(

@@ -3,8 +3,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use actix::clock;
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use actix_ws::{AggregatedMessage, AggregatedMessageStream, CloseReason, Session};
+use actix_web::web::{self, Bytes};
+use actix_web::{HttpRequest, HttpResponse, Responder};
+use actix_ws::{AggregatedMessage, AggregatedMessageStream, CloseCode, CloseReason, Session};
 use chrono::TimeDelta;
 use prost::Message as _;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -73,12 +74,12 @@ impl SharifyWsInstance {
         // if there's only one, that means its the owner/creator
         let is_room_new = room.users.len() == 1;
 
-        let user = room.users.iter().find(|e| e.id == user_id);
-
-        // User should have joined the room before WS init
-        if user.is_none() {
+        let Some(user) = room.users.iter().find(|e| e.id == user_id) else {
+            // User should have joined the room before WS init
             return Ok(HttpResponse::Unauthorized().finish());
-        }
+        };
+
+        let username = user.username.clone();
 
         if let Some(instance) = ws_mgr.write().await.ws_sessions.remove(&user_id) {
             let _ = instance.session.close(None).await;
@@ -110,13 +111,30 @@ impl SharifyWsInstance {
             user_id.clone(),
         );
 
-        _self.send_data_when_ready(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), user_id.clone());
+        _self.send_data_when_ready(
+            Arc::clone(&ws_mgr),
+            Arc::clone(&state_mgr),
+            user_id.clone(),
+            !is_room_new,
+        );
 
         // Room scoped thread(s)
         if is_room_new {
             _self.init_spotify_data_loop(Arc::clone(&ws_mgr), Arc::clone(&state_mgr));
 
             _self.init_room_activity_check_loop(Arc::clone(&state_mgr));
+
+        // New Room user entered
+        } else {
+            let mut buf = Vec::new();
+
+            let cmd = CommandResponse {
+                r#type: Some(command_response::Type::NewUserJoined(username)),
+            };
+
+            cmd.encode(&mut buf).unwrap();
+
+            Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
         ws_mgr.write().await.ws_sessions.insert(user_id, _self);
@@ -164,137 +182,14 @@ impl SharifyWsInstance {
                                         break;
                                     }
                                     AggregatedMessage::Binary(bytes) => {
-                                        let Ok(command) = Command::decode(bytes) else {
-                                            debug!(
-                                                "Unrecognized command from user: {}",
-                                                utils::decode_user_email(&user_id)
-                                            );
-                                            continue;
-                                        };
-                                        let Some(cmd_type) = command.r#type else {
-                                            continue;
-                                        };
-
-                                        let ws_guard = ws_mgr.read().await;
-                                        let Some(mut session) = ws_guard
-                                            .ws_sessions
-                                            .get(&user_id)
-                                            .map(|instance| instance.session.clone())
-                                            else {
-                                                break;
-                                            };
-
-                                            drop(ws_guard);
-
-                                            let should_room_be_closed = state_mgr
-                                                .read()
-                                                .await
-                                                .is_user_an_owner_and_alone(room_id, &user_id);
-
-                                        let ws_cmd = WSCmd::new(Arc::clone(&state_mgr), user_id.clone(), room_id);
-
-                                        let processed_cmd = ws_cmd.process(cmd_type.clone()).await;
-
-                                        // Handle state impact first
-                                        if let (Ok(_), state_impact) = &processed_cmd {
-                                            match state_impact {
-                                                StateImpact::Nothing => {}
-                                                impact @ StateImpact::Room | impact @ StateImpact::Both => {
-                                                    if matches!(impact, StateImpact::Both) {
-                                                        let ws_mgr = Arc::clone(&ws_mgr);
-                                                        let state_mgr = Arc::clone(&state_mgr);
-
-                                                        // This is a bit ugly but wesocket is so fast that
-                                                        // Spotify current playback data is not synced yet
-                                                        actix_rt::spawn(async move {
-                                                            actix_rt::time::sleep(Duration::from_millis(500)).await;
-
-                                                            let _ = Self::send_spotify_playback_in_room(
-                                                                ws_mgr, state_mgr, room_id,
-                                                            )
-                                                                .await;
-                                                            });
-                                                    }
-
-                                                    Self::send_room_data_in_room(
-                                                        Arc::clone(&ws_mgr),
-                                                        Arc::clone(&state_mgr),
-                                                        room_id,
-                                                    )
-                                                        .await;
-                                                    }
-                                            }
-                                        }
-
-                                        // Then handle cmd result
-                                        match processed_cmd {
-                                            // Ignore the Result until I might need to do smth differently based on it
-                                            (Ok(Some(response)), _) | (Err(response), _) => {
-                                                let mut buf = Vec::new();
-                                                response.encode(&mut buf);
-
-                                                if !Self::send_binary(
-                                                    &mut session,
-                                                    &user_id,
-                                                    Arc::clone(&ws_mgr),
-                                                    buf,
-                                                )
-                                                    .await
-                                                {
-                                                    debug!("Failed to send command response to user {user_id}. WS session closed");
-                                                }
-                                            }
-                                            (Ok(None), _) => {
-                                                let is_ban = matches!(cmd_type, command::Type::Ban(_));
-
-                                                match cmd_type {
-                                                    command::Type::Kick(command::Kick { reason, user_id })
-                                                        | command::Type::Ban(command::Ban { reason, user_id }) => {
-                                                            if let Some(mut instance) =
-                                                                ws_mgr.write().await.ws_sessions.remove(&user_id)
-                                                            {
-                                                                let mut buf = Vec::new();
-
-                                                                let cmd = if is_ban {
-                                                                    command_response::Type::Ban(command_response::Ban {
-                                                                        reason,
-                                                                    })
-                                                                } else {
-                                                                    command_response::Type::Kick(
-                                                                        command_response::Kick { reason },
-                                                                    )
-                                                                };
-
-                                                                cmd.encode(&mut buf);
-
-                                                                let _ = SharifyWsInstance::send_binary(
-                                                                    &mut instance.session,
-                                                                    &user_id,
-                                                                    Arc::clone(&ws_mgr),
-                                                                    buf,
-                                                                )
-                                                                    .await;
-                                                                }
-                                                        }
-                                                    command::Type::LeaveRoom(_) => {
-                                                        if should_room_be_closed.is_ok_and(|b| b) {
-                                                            Self::close_room(
-                                                                ws_mgr,
-                                                                state_mgr,
-                                                                room_id,
-                                                                Some(
-                                                                    "No owner left to manage the room, closing..."
-                                                                    .into(),
-                                                                ),
-                                                            )
-                                                                .await;
-
-                                                            return;
-                                                        }
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
+                                        if !Self::handle_binary_message(
+                                            bytes,
+                                            Arc::clone(&ws_mgr),
+                                            Arc::clone(&state_mgr),
+                                            room_id,
+                                            &user_id
+                                        ).await {
+                                            break;
                                         }
                                     }
                                 }
@@ -325,11 +220,148 @@ impl SharifyWsInstance {
         });
     }
 
+    /// Returns wether the aggregator loop should or shouldn't continue
+    async fn handle_binary_message(
+        bytes: Bytes,
+        ws_mgr: Arc<RwLock<SharifyWsManager>>,
+        state_mgr: Arc<RwLock<RoomManager>>,
+        room_id: RoomID,
+        user_id: &RoomUserID,
+    ) -> bool {
+        let Ok(command) = Command::decode(bytes) else {
+            debug!(
+                "Unrecognized command from user: {}",
+                utils::decode_user_email(user_id)
+            );
+            return true;
+        };
+        let Some(cmd_type) = command.r#type else {
+            return true;
+        };
+
+        let ws_guard = ws_mgr.read().await;
+        let Some(mut session) = ws_guard
+            .ws_sessions
+            .get(user_id)
+            .map(|instance| instance.session.clone())
+        else {
+            return false;
+        };
+
+        drop(ws_guard);
+
+        let should_room_be_closed = state_mgr
+            .read()
+            .await
+            .is_user_an_owner_and_alone(room_id, user_id);
+
+        let ws_cmd = WSCmd::new(Arc::clone(&state_mgr), user_id.clone(), room_id);
+
+        let processed_cmd = ws_cmd.process(cmd_type.clone()).await;
+
+        // Handle state impact first
+        if let (Ok(_), state_impact) = &processed_cmd {
+            match state_impact {
+                StateImpact::Nothing => {}
+                impact @ StateImpact::Room | impact @ StateImpact::Both => {
+                    if matches!(impact, StateImpact::Both) {
+                        let ws_mgr = Arc::clone(&ws_mgr);
+                        let state_mgr = Arc::clone(&state_mgr);
+
+                        // This is a bit ugly but wesocket is so fast that
+                        // Spotify current playback data is not synced yet
+                        actix_rt::spawn(async move {
+                            actix_rt::time::sleep(Duration::from_millis(500)).await;
+
+                            let _ = Self::send_spotify_playback_in_room(ws_mgr, state_mgr, room_id)
+                                .await;
+                        });
+                    }
+
+                    Self::send_room_data_in_room(
+                        Arc::clone(&ws_mgr),
+                        Arc::clone(&state_mgr),
+                        room_id,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        // Then handle cmd result
+        match processed_cmd {
+            // Ignore the Result until I might need to do smth differently based on it
+            (Ok(Some(response)), _) | (Err(response), _) => {
+                let mut buf = Vec::new();
+                response.encode(&mut buf);
+
+                if !Self::send_binary(&mut session, user_id, Arc::clone(&ws_mgr), buf).await {
+                    debug!("Failed to send command response to user {user_id}. WS session closed");
+                }
+            }
+            (Ok(None), _) => {
+                let is_ban = matches!(cmd_type, command::Type::Ban(_));
+
+                match cmd_type {
+                    command::Type::Kick(command::Kick { reason, user_id })
+                    | command::Type::Ban(command::Ban { reason, user_id }) => {
+                        if let Some(mut instance) =
+                            ws_mgr.write().await.ws_sessions.remove(&user_id)
+                        {
+                            let mut buf = Vec::new();
+
+                            let cmd = if is_ban {
+                                command_response::Type::Ban(command_response::Ban { reason })
+                            } else {
+                                command_response::Type::Kick(command_response::Kick { reason })
+                            };
+
+                            cmd.encode(&mut buf);
+
+                            let _ = SharifyWsInstance::send_binary(
+                                &mut instance.session,
+                                &user_id,
+                                Arc::clone(&ws_mgr),
+                                buf,
+                            )
+                            .await;
+                        }
+                    }
+                    command::Type::LeaveRoom(_) => {
+                        Self::close_session(
+                            Arc::clone(&ws_mgr),
+                            Arc::clone(&state_mgr),
+                            user_id.clone(),
+                            None,
+                        )
+                        .await;
+
+                        if should_room_be_closed.is_ok_and(|b| b) {
+                            Self::close_room(
+                                ws_mgr,
+                                state_mgr,
+                                room_id,
+                                Some("No owner left to manage the room, closing...".into()),
+                            )
+                            .await;
+
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        true
+    }
+
     fn send_data_when_ready(
         &self,
         ws_mgr: Arc<RwLock<SharifyWsManager>>,
         state_mgr: Arc<RwLock<RoomManager>>,
         user_id: RoomUserID,
+        include_spotify_data: bool,
     ) {
         actix_rt::spawn(async move {
             let mut interval = clock::interval(Duration::from_millis(500));
@@ -351,21 +383,28 @@ impl SharifyWsInstance {
                     (instance.session.clone(), instance.room_id)
                 };
 
+                Self::send_room_data_in_room(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), room_id)
+                    .await;
+
                 let mut buf = Vec::new();
 
-                let cmd = CommandResponse {
-                    r#type: Some(match state_mgr.read().await.get_room(&room_id).cloned() {
-                        None => command_response::Type::RoomError(
-                            // TODO Unreachable ?
-                            RoomError::RoomNotFound.into(),
-                        ),
-                        Some(room) => command_response::Type::Room(room.into()),
-                    }),
-                };
+                if include_spotify_data
+                    && let Err(err) = Self::send_spotify_playback_in_room(
+                        Arc::clone(&ws_mgr),
+                        Arc::clone(&state_mgr),
+                        room_id,
+                    )
+                    .await
+                {
+                    let cmd = CommandResponse {
+                        r#type: Some(err.into()),
+                    };
 
-                cmd.encode(&mut buf).unwrap();
+                    cmd.encode(&mut buf).unwrap();
 
-                Self::send_binary(&mut session, &user_id, Arc::clone(&ws_mgr), buf).await;
+                    Self::send_binary(&mut session, &user_id, Arc::clone(&ws_mgr), buf).await;
+                }
+
                 break;
             }
         });
@@ -560,6 +599,10 @@ impl SharifyWsInstance {
             Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
+        if let Ok(Some(ref track)) = state {
+            let _ = guard.remove_track_from_queue(room_id, track.track_id.clone());
+        }
+
         let cmd = CommandResponse {
             r#type: Some(command_response::Type::SpotifyPlaybackState(
                 command_response::SpotifyPlaybackState {
@@ -689,45 +732,30 @@ impl SharifyWsInstance {
         room_id: RoomID,
         reason: Option<String>,
     ) {
-        let cmd = CommandResponse {
-            r#type: Some(command_response::Type::GenericError(
-                reason.unwrap_or("Internal server error, closing room...".into()),
-            )),
-        };
+        let mut ws_guard = ws_mgr.write().await;
 
-        let mut buf = Vec::new();
-
-        cmd.encode(&mut buf).unwrap();
-
-        let ws_guard = ws_mgr.read().await;
-
-        let room_users = ws_guard
+        let room_users_id = ws_guard
             .ws_sessions
             .iter()
             .filter_map(|(id, instance)| {
                 if instance.room_id == room_id {
-                    Some((id.clone(), instance.session.clone()))
+                    Some(id.clone())
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
 
-        drop(ws_guard);
-
-        let mut ws_guard = ws_mgr.write().await;
-
-        for (room_user_id, mut session) in room_users {
-            Self::send_binary(
-                &mut session,
-                &room_user_id,
-                Arc::clone(&ws_mgr),
-                buf.clone(),
-            )
-            .await;
-
-            let _ = session.close(None).await;
-            ws_guard.ws_sessions.remove(&room_user_id);
+        for room_user_id in room_users_id {
+            if let Some(instance) = ws_guard.ws_sessions.remove(&room_user_id) {
+                let _ = instance
+                    .session
+                    .close(Some(CloseReason {
+                        code: CloseCode::Normal,
+                        description: reason.clone(),
+                    }))
+                    .await;
+            }
         }
 
         let _ = state_mgr.write().await.delete_room(room_id, None);
