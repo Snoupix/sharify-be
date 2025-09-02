@@ -13,7 +13,7 @@
     kill -s TERM $(pgrep sharify-be)
 
 @test:
-    cargo test -- --nocapture
+    RUST_BACKTRACE=1 cargo test -- --nocapture
 
 @dbg: build
     rust-gdb target/debug/sharify-be

@@ -1,8 +1,9 @@
+use std::num::ParseIntError;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, MappedLocalTime, TimeZone as _, Utc};
+use chrono::{DateTime, TimeZone as _, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use urlencoding::encode as encode_url;
@@ -25,18 +26,20 @@ impl Timestamp {
         Self(t)
     }
 
-    pub fn to_datetime(&self) -> MappedLocalTime<DateTime<Utc>> {
-        let timestamp: i64 = self.clone().into();
+    pub fn to_datetime(&self) -> Result<DateTime<Utc>, ParseIntError> {
+        let timestamp: i64 = self.try_into()?;
         let secs = timestamp / 1000;
         let nsecs = (timestamp % 1000) * 1_000_000;
 
-        Utc.timestamp_opt(secs, nsecs as _)
+        Ok(Utc.timestamp_opt(secs, nsecs as _).unwrap())
     }
 }
 
-impl From<Timestamp> for i64 {
-    fn from(value: Timestamp) -> Self {
-        value.0.parse().unwrap()
+impl TryFrom<&Timestamp> for i64 {
+    type Error = ParseIntError;
+
+    fn try_from(value: &Timestamp) -> Result<Self, Self::Error> {
+        value.0.parse()
     }
 }
 

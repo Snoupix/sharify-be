@@ -69,8 +69,8 @@ async fn create_room_impl(sv_timeout: u64) -> (mpsc::Sender<()>, Client, Room) {
             credentials: Some(http_command::Credentials {
                 access_token: "".into(),
                 refresh_token: "".into(),
-                expires_in: "".into(),
-                created_at: "".into(),
+                expires_in: 3600,
+                created_at: "4123595573591".into(),
             }),
         })),
     };
