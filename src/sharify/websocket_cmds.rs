@@ -9,12 +9,13 @@ use crate::proto::cmd::command_response;
 use crate::sharify::room::RoomManager;
 use crate::sharify::room::{RoomError, RoomID, RoomUserID};
 use crate::sharify::spotify::Spotify;
+use crate::sharify::utils::*;
 
 pub enum StateImpact {
     Nothing,
     Room,
     // Anything player related is gonna affect the room state (logs for example)
-    Both,
+    Both(SpotifyFetchT),
 }
 
 #[async_trait]
@@ -98,7 +99,17 @@ impl Command {
             | command::Type::Pause(_)
             | command::Type::SkipNext(_)
             | command::Type::SkipPrevious(_)
-            | command::Type::SeekToPos(_) => StateImpact::Both,
+            | command::Type::SeekToPos(_) => StateImpact::Both(match &cmd_type {
+                command::Type::AddToQueue(_) => SPOTIFY_FETCH_TRACKS_Q,
+                command::Type::SetVolume(_)
+                | command::Type::PlayResume(_)
+                | command::Type::Pause(_)
+                | command::Type::SeekToPos(_) => SPOTIFY_FETCH_PLAYBACK,
+                command::Type::SkipNext(_) | command::Type::SkipPrevious(_) => {
+                    SPOTIFY_FETCH_TRACKS_Q | SPOTIFY_FETCH_PLAYBACK
+                }
+                _ => unreachable!(),
+            }),
         };
 
         (

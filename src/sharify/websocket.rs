@@ -10,10 +10,11 @@ use chrono::TimeDelta;
 use prost::Message as _;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
+use crate::match_flags;
 use crate::proto::cmd::{command, command_response, Command, CommandResponse};
 use crate::sharify::room::{RoomError, RoomID, RoomManager, RoomUserID, INACTIVE_ROOM_MINS};
 use crate::sharify::spotify::SpotifyError;
-use crate::sharify::utils;
+use crate::sharify::utils::*;
 use crate::sharify::websocket_cmds::{Command as WSCmd, StateImpact};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -202,7 +203,7 @@ impl SharifyWsInstance {
                         if Instant::now().duration_since(*hb.lock().await) > USER_WS_TIMEOUT {
                             debug!(
                                 "[WS] Disconnecting failed heartbeat email:{}, id:{}, room_id:{}",
-                                utils::decode_user_email(&user_id),
+                                decode_user_email(&user_id),
                                 user_id,
                                 room_id
                             );
@@ -231,7 +232,7 @@ impl SharifyWsInstance {
         let Ok(command) = Command::decode(bytes) else {
             debug!(
                 "Unrecognized command from user: {}",
-                utils::decode_user_email(user_id)
+                decode_user_email(user_id)
             );
             return true;
         };
@@ -263,8 +264,9 @@ impl SharifyWsInstance {
         if let (Ok(_), state_impact) = &processed_cmd {
             match state_impact {
                 StateImpact::Nothing => {}
-                impact @ StateImpact::Room | impact @ StateImpact::Both => {
-                    if matches!(impact, StateImpact::Both) {
+                impact @ StateImpact::Room | impact @ StateImpact::Both(_) => {
+                    if let StateImpact::Both(spotify_fetching) = impact {
+                        let spotify_fetching = *spotify_fetching;
                         let ws_mgr = Arc::clone(&ws_mgr);
                         let state_mgr = Arc::clone(&state_mgr);
 
@@ -273,8 +275,13 @@ impl SharifyWsInstance {
                         actix_rt::spawn(async move {
                             actix_rt::time::sleep(Duration::from_millis(500)).await;
 
-                            let _ = Self::send_spotify_playback_in_room(ws_mgr, state_mgr, room_id)
-                                .await;
+                            let _ = Self::send_spotify_state_in_room(
+                                ws_mgr,
+                                state_mgr,
+                                room_id,
+                                spotify_fetching,
+                            )
+                            .await;
                         });
                     }
 
@@ -389,10 +396,11 @@ impl SharifyWsInstance {
                 let mut buf = Vec::new();
 
                 if include_spotify_data
-                    && let Err(err) = Self::send_spotify_playback_in_room(
+                    && let Err(err) = Self::send_spotify_state_in_room(
                         Arc::clone(&ws_mgr),
                         Arc::clone(&state_mgr),
                         room_id,
+                        SPOTIFY_FETCH_TRACKS_Q | SPOTIFY_FETCH_PLAYBACK,
                     )
                     .await
                 {
@@ -484,10 +492,11 @@ impl SharifyWsInstance {
                         break;
                     }
                     _ = interval.tick() => {
-                        if Self::send_spotify_playback_in_room(
+                        if Self::send_spotify_state_in_room(
                             Arc::clone(&ws_mgr),
                             Arc::clone(&state_mgr),
-                            room_id
+                            room_id,
+                            SPOTIFY_FETCH_PLAYBACK | SPOTIFY_FETCH_TRACKS_Q
                         ).await.is_err() {
                             // Most probably expired tokens
                             Self::close_room(
@@ -511,13 +520,12 @@ impl SharifyWsInstance {
     ///     - Room not found
     ///     - Spotify endpoint fetch is err
     ///     - Refresh token fetch fail
-    async fn send_spotify_playback_in_room(
+    async fn send_spotify_state_in_room(
         ws_mgr: Arc<RwLock<SharifyWsManager>>,
         state_mgr: Arc<RwLock<RoomManager>>,
         room_id: RoomID,
+        spotify_fetch_flags: SpotifyFetchT,
     ) -> Result<(), SpotifyError> {
-        let mut rate_limit = None;
-
         let mut guard = state_mgr.write().await;
         let Some(room) = guard.get_room_mut(&room_id) else {
             return Err(SpotifyError::Generic("Room not found".into()));
@@ -547,6 +555,36 @@ impl SharifyWsInstance {
 
             return Err(SpotifyError::Generic("Failed to refresh tokens".into()));
         }
+
+        drop(guard);
+
+        let cmd = match_flags!(
+            spotify_fetch_flags,
+            [SPOTIFY_FETCH_ALL; Self::fetch_spotify_all(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), room_id)],
+            [SPOTIFY_FETCH_PLAYBACK; Self::fetch_spotify_playback(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), room_id)],
+            [SPOTIFY_FETCH_TRACKS_Q; Self::fetch_spotify_tracks(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), room_id)];
+            [flags; panic!("Unhandled Spotify Fetch flags: {flags}")]
+        );
+
+        let mut buf = Vec::new();
+
+        cmd.encode(&mut buf).unwrap();
+
+        Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
+
+        Ok(())
+    }
+
+    async fn fetch_spotify_all(
+        ws_mgr: Arc<RwLock<SharifyWsManager>>,
+        state_mgr: Arc<RwLock<RoomManager>>,
+        room_id: RoomID,
+    ) -> Result<CommandResponse, SpotifyError> {
+        let mut rate_limit = None;
+        let mut guard = state_mgr.write().await;
+        let Some(room) = guard.get_room_mut(&room_id) else {
+            return Err(SpotifyError::Generic("Room not found".into()));
+        };
 
         let (state, next, previous) = tokio::join!(
             room.spotify_handler.get_current_playback_state(),
@@ -603,23 +641,124 @@ impl SharifyWsInstance {
             let _ = guard.remove_track_from_queue(room_id, track.track_id.clone());
         }
 
-        let cmd = CommandResponse {
-            r#type: Some(command_response::Type::SpotifyPlaybackState(
-                command_response::SpotifyPlaybackState {
+        Ok(CommandResponse {
+            r#type: Some(command_response::Type::SpotifyAllState(
+                command_response::SpotifyAllState {
                     previous_tracks: previous.map(|v| Some(v.into())).unwrap_or_default(),
                     state: state.map(|v| v.map(Into::into)).unwrap_or_default(),
                     next_tracks: next.map(|v| Some(v.into())).unwrap_or_default(),
                 },
             )),
+        })
+    }
+
+    async fn fetch_spotify_tracks(
+        ws_mgr: Arc<RwLock<SharifyWsManager>>,
+        state_mgr: Arc<RwLock<RoomManager>>,
+        room_id: RoomID,
+    ) -> Result<CommandResponse, SpotifyError> {
+        let mut rate_limit = None;
+        let mut guard = state_mgr.write().await;
+        let Some(room) = guard.get_room_mut(&room_id) else {
+            return Err(SpotifyError::Generic("Room not found".into()));
         };
 
-        let mut buf = Vec::new();
+        let (next, previous) = tokio::join!(
+            room.spotify_handler.get_next_tracks(),
+            room.spotify_handler.get_recent_tracks(Some(10)),
+        );
 
-        cmd.encode(&mut buf).unwrap();
+        if let Err(ref err) = previous {
+            error!(
+                "Failed to fetch recent tracks for room {room_id}: {}",
+                String::from(err.clone())
+            );
 
-        Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
+            if let SpotifyError::RateLimited(time) = err {
+                rate_limit = Some(time);
+            }
+        }
 
-        Ok(())
+        if let Err(ref err) = next {
+            error!(
+                "Failed to fetch next tracks (queue) for room {room_id}: {}",
+                String::from(err.clone())
+            );
+
+            if let SpotifyError::RateLimited(time) = err {
+                rate_limit = Some(time);
+            }
+        }
+
+        if let Some(time) = rate_limit {
+            let cmd = CommandResponse {
+                r#type: Some(command_response::Type::SpotifyRateLimited(*time)),
+            };
+
+            let mut buf = Vec::new();
+
+            cmd.encode(&mut buf).unwrap();
+
+            Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
+        }
+
+        Ok(CommandResponse {
+            r#type: Some(command_response::Type::SpotifyTracksState(
+                command_response::SpotifyTracksState {
+                    previous_tracks: previous.map(|v| Some(v.into())).unwrap_or_default(),
+                    next_tracks: next.map(|v| Some(v.into())).unwrap_or_default(),
+                },
+            )),
+        })
+    }
+
+    async fn fetch_spotify_playback(
+        ws_mgr: Arc<RwLock<SharifyWsManager>>,
+        state_mgr: Arc<RwLock<RoomManager>>,
+        room_id: RoomID,
+    ) -> Result<CommandResponse, SpotifyError> {
+        let mut rate_limit = None;
+        let mut guard = state_mgr.write().await;
+        let Some(room) = guard.get_room_mut(&room_id) else {
+            return Err(SpotifyError::Generic("Room not found".into()));
+        };
+
+        let state = room.spotify_handler.get_current_playback_state().await;
+
+        if let Err(ref err) = state {
+            error!(
+                "Failed to fetch playback state for room {room_id}: {}",
+                String::from(err.clone())
+            );
+
+            if let SpotifyError::RateLimited(time) = err {
+                rate_limit = Some(time);
+            }
+        }
+
+        if let Some(time) = rate_limit {
+            let cmd = CommandResponse {
+                r#type: Some(command_response::Type::SpotifyRateLimited(*time)),
+            };
+
+            let mut buf = Vec::new();
+
+            cmd.encode(&mut buf).unwrap();
+
+            Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
+        }
+
+        if let Ok(Some(ref track)) = state {
+            let _ = guard.remove_track_from_queue(room_id, track.track_id.clone());
+        }
+
+        Ok(CommandResponse {
+            r#type: Some(command_response::Type::SpotifyPlaybackState(
+                command_response::SpotifyPlaybackState {
+                    state: state.map(|v| v.map(Into::into)).unwrap_or_default(),
+                },
+            )),
+        })
     }
 
     async fn send_room_data_in_room(
@@ -705,7 +844,7 @@ impl SharifyWsInstance {
     ) {
         debug!(
             "[WS] Closing session email:{}, id:{}",
-            utils::decode_user_email(&user_id),
+            decode_user_email(&user_id),
             user_id,
         );
 

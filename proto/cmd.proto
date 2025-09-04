@@ -94,11 +94,13 @@ message CommandResponse {
     string generic_error = 3;
     Kick kick = 4;
     Ban ban = 5;
-    SpotifyPlaybackState spotify_playback_state = 6;
+    SpotifyAllState spotify_all_state = 6;
     spotify.TrackArray spotify_search_result = 7;
     uint64 spotify_rate_limited = 8;
     role.RoleError role_error = 9;
     string new_user_joined = 10;
+    SpotifyPlaybackState spotify_playback_state = 11;
+    SpotifyTracksState spotify_tracks_state = 12;
   }
 
   message Kick {
@@ -109,9 +111,18 @@ message CommandResponse {
     string reason = 1;
   }
 
-  message SpotifyPlaybackState {
+  message SpotifyAllState {
     optional spotify.PlaybackState state = 1;
     spotify.TrackArray previous_tracks = 2;
     spotify.TrackArray next_tracks = 3;
+  }
+
+  message SpotifyPlaybackState {
+    optional spotify.PlaybackState state = 1;
+  }
+
+  message SpotifyTracksState {
+    spotify.TrackArray previous_tracks = 1;
+    spotify.TrackArray next_tracks = 2;
   }
 }

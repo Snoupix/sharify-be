@@ -6,9 +6,25 @@ use sha2::{Digest, Sha256};
 
 use super::room::{RoomUserID, MAX_EMAIL_CHAR, MIN_EMAIL_CHAR};
 
+#[macro_export]
+macro_rules! match_flags {
+    ($flags:expr, $([$flag:expr; $fut:expr]),+; [$placeholder:ident; $fallback:expr]) => {
+        match $flags {
+            $(f if f & $flag == $flag => $fut.await?),+,
+            $placeholder => $fallback,
+        }
+    };
+}
+
+pub type SpotifyFetchT = u8;
+
 static __COMPTIME_ASSERTIONS: () = {
     assert!((MIN_EMAIL_CHAR as u8) < (MAX_EMAIL_CHAR as u8));
 };
+
+pub const SPOTIFY_FETCH_ALL: SpotifyFetchT = SPOTIFY_FETCH_PLAYBACK | SPOTIFY_FETCH_TRACKS_Q;
+pub const SPOTIFY_FETCH_PLAYBACK: SpotifyFetchT = 1 << 0;
+pub const SPOTIFY_FETCH_TRACKS_Q: SpotifyFetchT = 1 << 1;
 
 pub fn generate_code_verifier() -> String {
     rng()
