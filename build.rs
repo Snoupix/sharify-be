@@ -10,6 +10,10 @@ const PROTOC_TS_PLUGIN: &str = concat!(
 );
 
 fn main() -> std::io::Result<()> {
+    println!("cargo::rerun-if-changed=build.rs");
+
+    let mut protoc = prost_build::Config::new();
+
     let proto_files = fs::read_dir(PROTO_DIR)?
         .filter_map(|entry| {
             entry
@@ -19,7 +23,11 @@ fn main() -> std::io::Result<()> {
         .filter(|file_path| file_path.ends_with(".proto"))
         .collect::<Vec<_>>();
 
-    prost_build::compile_protos(&proto_files, &[PROTO_DIR])?;
+    // Needed for older versions of protoc
+    protoc.protoc_arg("--experimental_allow_proto3_optional");
+    protoc.compile_protos(&proto_files, &[PROTO_DIR])?;
+
+    let _ = fs::create_dir(PROTO_TS_OUT);
 
     for file in proto_files {
         println!("cargo::rerun-if-changed={file}");
