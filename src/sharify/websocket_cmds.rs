@@ -37,6 +37,7 @@ trait Commands {
     async fn leave_room(self) -> Self::Output;
     async fn create_role(self, opts: command::CreateRole) -> Self::Output;
     async fn rename_role(self, opts: command::RenameRole) -> Self::Output;
+    async fn delete_role(self, id: Vec<u8>) -> Self::Output;
 }
 
 pub struct Command {
@@ -88,7 +89,8 @@ impl Command {
 
         let cmd_impact = match &cmd_type {
             command::Type::GetRoom(_) | command::Type::Search(_) => StateImpact::Nothing,
-            command::Type::CreateRole(_)
+            command::Type::DeleteRole(_)
+            | command::Type::CreateRole(_)
             | command::Type::RenameRole(_)
             | command::Type::LeaveRoom(_)
             | command::Type::Kick(_)
@@ -128,6 +130,7 @@ impl Command {
                 command::Type::LeaveRoom(_) => self.leave_room().await,
                 command::Type::CreateRole(opts) => self.create_role(opts).await,
                 command::Type::RenameRole(opts) => self.rename_role(opts).await,
+                command::Type::DeleteRole(id) => self.delete_role(id).await,
             },
             cmd_impact,
         )
@@ -178,9 +181,9 @@ impl Command {
             | command::Type::SkipPrevious(_)
             | command::Type::SeekToPos(_) => perms.can_use_controls,
             command::Type::Kick(_) | command::Type::Ban(_) => perms.can_manage_users,
-            command::Type::CreateRole(_) | command::Type::RenameRole(_) => {
-                perms.can_manage_users && perms.can_add_moderator
-            }
+            command::Type::DeleteRole(_)
+            | command::Type::CreateRole(_)
+            | command::Type::RenameRole(_) => perms.can_manage_users && perms.can_add_moderator,
         }
     }
 
@@ -360,6 +363,21 @@ impl Commands for Command {
 
         room.role_manager
             .edit_role(role_id, opts.name, role.permissions);
+
+        Ok(None)
+    }
+
+    async fn delete_role(self, id: Vec<u8>) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
+
+        let room = guard
+            .get_room_mut(&self.room_id)
+            .ok_or(Self::T::RoomError(RoomError::RoomNotFound.into()))?;
+
+        let role_id = Uuid::from_slice(&id[..16])
+            .map_err(|err| Self::T::GenericError(format!("Failed to read role_id {err}")))?;
+
+        room.role_manager.delete_role(role_id);
 
         Ok(None)
     }

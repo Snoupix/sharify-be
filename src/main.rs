@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
 
+mod discord;
 mod proto;
 mod routes;
 mod sharify;
@@ -70,6 +71,7 @@ async fn serve() -> std::io::Result<()> {
             .service(routes::proto_command)
             .service(routes::code_verifier)
             .service(routes::code_challenge)
+            .service(routes::send_discord_webhook)
             .service(
                 web::resource("/v1/{room_id}/{user_id}")
                     .route(web::get().to(websocket::SharifyWsInstance::init)),

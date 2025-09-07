@@ -41,10 +41,6 @@ pub struct Room {
     #[serde(skip)]
     pub inactive_for: Option<Instant>,
     #[serde(skip)]
-    /// Since room state is sent based on commands that modifies its state, we should avoid
-    /// over-send the room state
-    pub last_data_send: Option<Instant>,
-    #[serde(skip)]
     pub spotify_handler: Spotify,
 }
 
@@ -167,7 +163,6 @@ impl RoomManager {
                 max_users: MAX_USERS,
                 spotify_handler: Spotify::new(creds.into()),
                 inactive_for: None,
-                last_data_send: None,
             },
         );
 

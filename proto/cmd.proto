@@ -38,6 +38,7 @@ message HttpCommand {
   }
 }
 
+// Usually Client to Server
 message Command {
   oneof type {
     // Useless bool value
@@ -60,6 +61,7 @@ message Command {
     bool leave_room = 12;
     CreateRole create_role = 13;
     RenameRole rename_role = 14;
+    bytes delete_role = 15;
   }
 
   message Kick {
@@ -87,6 +89,7 @@ message Command {
   }
 }
 
+// Usually Server to Client
 message CommandResponse {
   oneof type {
     room.RoomError room_error = 1;

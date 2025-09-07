@@ -5,6 +5,7 @@ use prost::Message as _;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::discord;
 use crate::proto::cmd::{command_response, http_command, CommandResponse, HttpCommand};
 use crate::proto::create_error_response;
 use crate::sharify;
@@ -145,6 +146,17 @@ pub async fn proto_command(
         _ => HttpResponse::ServiceUnavailable()
             .body("Unreachable error: POST command unhandled or missing command parts"),
     }
+}
+
+#[post("/v1/webhook")]
+pub async fn send_discord_webhook(
+    web::Json(payload): web::Json<discord::SendWebhookPayload>,
+) -> impl Responder {
+    if let Err(err) = discord::send_webhook(payload.wh_type, payload.content).await {
+        return HttpResponse::InternalServerError().body(err);
+    }
+
+    HttpResponse::Ok().finish()
 }
 
 #[get("/v1/code_verifier")]

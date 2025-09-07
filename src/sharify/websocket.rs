@@ -774,13 +774,7 @@ impl SharifyWsInstance {
                     // TODO Unreachable ?
                     RoomError::RoomNotFound.into(),
                 ),
-                Some(room) => {
-                    if room.last_data_send.is_none() {
-                        room.last_data_send = Some(Instant::now());
-                    }
-
-                    command_response::Type::Room(room.clone().into())
-                }
+                Some(room) => command_response::Type::Room(room.clone().into()),
             }),
         };
 

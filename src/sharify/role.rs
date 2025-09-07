@@ -36,8 +36,8 @@ impl RoleManager {
         Ok(())
     }
 
-    pub fn remove_role(&mut self, id: Uuid) {
-        self.0.retain(|role| role.id == id);
+    pub fn delete_role(&mut self, id: Uuid) {
+        self.0.retain(|role| role.id != id);
     }
 
     pub fn edit_role(&mut self, id: Uuid, name: String, permissions: RolePermission) {

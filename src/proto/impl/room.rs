@@ -183,7 +183,6 @@ impl From<proto::room::Room> for room::Room {
             logs: room.logs.into_iter().map(Into::into).collect(),
             max_users: room.max_users as _,
             inactive_for: None,
-            last_data_send: None,
             spotify_handler: Spotify::default(),
         }
     }
