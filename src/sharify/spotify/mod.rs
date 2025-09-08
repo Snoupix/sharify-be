@@ -1,3 +1,5 @@
+pub mod web_utils;
+
 use std::num::ParseIntError;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -8,10 +10,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use urlencoding::encode as encode_url;
 
-use super::spotify_web_utils::endpoints::*;
-use super::spotify_web_utils::{
-    RefreshTokenOutput, SpotifyCurrentPlaybackOutput, SpotifyTackArray, SpotifyTrack,
-};
+use web_utils::endpoints::*;
+use web_utils::{RefreshTokenOutput, SpotifyCurrentPlaybackOutput, SpotifyTackArray, SpotifyTrack};
 
 pub const RATE_LIMIT_REQUEST_WINDOW: Duration = Duration::from_secs(30);
 pub const REQUEST_COUNT_PER_WINDOW: u8 = 10;

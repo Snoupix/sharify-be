@@ -10,12 +10,12 @@ use chrono::TimeDelta;
 use prost::Message as _;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
+use super::commands::{Command as WSCmd, StateImpact};
 use crate::match_flags;
 use crate::proto::cmd::{command, command_response, Command, CommandResponse};
 use crate::sharify::room::{RoomError, RoomID, RoomManager, RoomUserID, INACTIVE_ROOM_MINS};
 use crate::sharify::spotify::SpotifyError;
 use crate::sharify::utils::*;
-use crate::sharify::websocket_cmds::{Command as WSCmd, StateImpact};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// 2 times the HEARTBEAT_INTERVAL because we handle HB and Messages on the same loop and a message
