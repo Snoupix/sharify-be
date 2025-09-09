@@ -12,6 +12,9 @@
 @stop:
     kill -s TERM $(pgrep sharify-be)
 
+@update *flags:
+    cargo update {{flags}}
+
 @test:
     RUST_BACKTRACE=1 cargo test -- --nocapture
 
