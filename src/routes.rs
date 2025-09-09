@@ -9,7 +9,8 @@ use crate::discord;
 use crate::proto::cmd::{command_response, http_command, CommandResponse, HttpCommand};
 use crate::proto::create_error_response;
 use crate::sharify;
-use crate::sharify::room::{CredentialsInput, RoomManager};
+use crate::sharify::room::CredentialsInput;
+use crate::sharify::room_manager::RoomManager;
 use crate::sharify::spotify::Timestamp;
 
 #[get("/")]

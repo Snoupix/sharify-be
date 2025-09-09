@@ -13,8 +13,12 @@ use urlencoding::encode as encode_url;
 use web_utils::endpoints::*;
 use web_utils::{RefreshTokenOutput, SpotifyCurrentPlaybackOutput, SpotifyTackArray, SpotifyTrack};
 
+/// This is a safe offset to fetch next playback after the song ends. This is due to the fact that
+/// the playback API from Spotify is ~900ms late
+pub const FETCH_OFFSET_MS: u64 = 2000;
+pub const DEFAULT_DATA_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 2);
 pub const RATE_LIMIT_REQUEST_WINDOW: Duration = Duration::from_secs(30);
-pub const REQUEST_COUNT_PER_WINDOW: u8 = 10;
+pub const REQUEST_COUNT_PER_WINDOW: u8 = 20;
 
 // pub static CODE: OnceLock<Arc<RwLock<String>>> = OnceLock::new();
 

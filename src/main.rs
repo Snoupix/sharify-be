@@ -20,7 +20,8 @@ use actix_web::middleware;
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
 use tokio::sync::{mpsc, Mutex, RwLock};
 
-use sharify::room::{RoomID, RoomManager};
+use sharify::room::RoomID;
+use sharify::room_manager::RoomManager;
 use sharify::websocket::{self, SharifyWsManager};
 
 const SOCKET_ADDR: (u8, u8, u8, u8, u16) = (0, 0, 0, 0, 3100);
@@ -31,7 +32,6 @@ static DATA_FETCHING_INTERVALS: OnceLock<Arc<Mutex<HashMap<RoomID, mpsc::Sender<
     OnceLock::new();
 
 pub const DATA_FETCHING_INTERVAL: Duration = Duration::from_millis(5000);
-pub const SPOTIFY_FETCHING_INTERVAL: Duration = Duration::from_millis(1000 * 60 * 2);
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

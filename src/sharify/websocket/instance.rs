@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use actix::clock;
+use actix_rt::time;
 use actix_web::web::{self, Bytes};
 use actix_web::{HttpRequest, HttpResponse, Responder};
 use actix_ws::{AggregatedMessage, AggregatedMessageStream, CloseCode, CloseReason, Session};
@@ -13,8 +14,9 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use super::commands::{Command as WSCmd, StateImpact};
 use crate::match_flags;
 use crate::proto::cmd::{command, command_response, Command, CommandResponse};
-use crate::sharify::room::{RoomError, RoomID, RoomManager, RoomUserID, INACTIVE_ROOM_MINS};
-use crate::sharify::spotify::SpotifyError;
+use crate::sharify::room::{RoomError, RoomID, RoomUserID, INACTIVE_ROOM_MINS};
+use crate::sharify::room_manager::RoomManager;
+use crate::sharify::spotify::{self, SpotifyError};
 use crate::sharify::utils::*;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -42,11 +44,8 @@ impl std::fmt::Debug for SharifyWsInstance {
 // TODO future: Make a UserID map to a Vec<SharifyWsInstance> for 2 reasons:
 // 1. The user can have multiple tabs open with the same session instead of overriding
 // 2. The user could be on 2 different rooms (bigger feature)
-#[derive(Default)]
-pub struct SharifyWsManager {
-    /// Maps a user_id to its Instance (ws_session, room_id, heartbeat)
-    ws_sessions: HashMap<RoomUserID, SharifyWsInstance>,
-}
+/// Maps a user_id to its SharifyWsInstance
+pub type SharifyWsManager = HashMap<RoomUserID, SharifyWsInstance>;
 
 impl SharifyWsInstance {
     fn new(room_id: RoomID, session: Session) -> Self {
@@ -73,6 +72,9 @@ impl SharifyWsInstance {
 
         // Logically, a room cannot be empty because it self destructs when the last one leaves so
         // if there's only one, that means its the owner/creator
+        //
+        // FIXME Caveat, when a single user in the room refreshes (so stays but re-init WS, it's
+        // true, so, wrong)
         let is_room_new = room.users.len() == 1;
 
         let Some(user) = room.users.iter().find(|e| e.id == user_id) else {
@@ -82,7 +84,7 @@ impl SharifyWsInstance {
 
         let username = user.username.clone();
 
-        if let Some(instance) = ws_mgr.write().await.ws_sessions.remove(&user_id) {
+        if let Some(instance) = ws_mgr.write().await.remove(&user_id) {
             let _ = instance.session.close(None).await;
         }
 
@@ -121,7 +123,10 @@ impl SharifyWsInstance {
 
         // Room scoped thread(s)
         if is_room_new {
-            _self.init_spotify_data_loop(Arc::clone(&ws_mgr), Arc::clone(&state_mgr));
+            // Avoid fetching anything with Spotify on integration/unit tests
+            if !cfg!(test) {
+                _self.init_spotify_data_loop(Arc::clone(&ws_mgr), Arc::clone(&state_mgr));
+            }
 
             _self.init_room_activity_check_loop(Arc::clone(&state_mgr));
 
@@ -138,7 +143,7 @@ impl SharifyWsInstance {
             Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
-        ws_mgr.write().await.ws_sessions.insert(user_id, _self);
+        ws_mgr.write().await.insert(user_id, _self);
 
         Ok(res)
     }
@@ -152,7 +157,7 @@ impl SharifyWsInstance {
         mut stream: AggregatedMessageStream,
         user_id: RoomUserID,
     ) {
-        let mut interval = clock::interval(HEARTBEAT_INTERVAL);
+        let mut interval = time::interval(HEARTBEAT_INTERVAL);
         let hb = Arc::clone(&self.hb);
         let mut session = self.session.clone();
         let room_id = self.room_id;
@@ -172,7 +177,7 @@ impl SharifyWsInstance {
                                         }
                                     }
                                     AggregatedMessage::Pong(_) => {
-                                        if let Some(instance) = ws_mgr.write().await.ws_sessions.get_mut(&user_id) {
+                                        if let Some(instance) = ws_mgr.write().await.get_mut(&user_id) {
                                             instance.is_ready = true;
                                         }
 
@@ -242,7 +247,6 @@ impl SharifyWsInstance {
 
         let ws_guard = ws_mgr.read().await;
         let Some(mut session) = ws_guard
-            .ws_sessions
             .get(user_id)
             .map(|instance| instance.session.clone())
         else {
@@ -312,9 +316,7 @@ impl SharifyWsInstance {
                 match cmd_type {
                     command::Type::Kick(command::Kick { reason, user_id })
                     | command::Type::Ban(command::Ban { reason, user_id }) => {
-                        if let Some(mut instance) =
-                            ws_mgr.write().await.ws_sessions.remove(&user_id)
-                        {
+                        if let Some(mut instance) = ws_mgr.write().await.remove(&user_id) {
                             let mut buf = Vec::new();
 
                             let cmd = if is_ban {
@@ -371,14 +373,14 @@ impl SharifyWsInstance {
         include_spotify_data: bool,
     ) {
         actix_rt::spawn(async move {
-            let mut interval = clock::interval(Duration::from_millis(500));
+            let mut interval = time::interval(Duration::from_millis(500));
 
             loop {
                 interval.tick().await;
 
                 let (mut session, room_id) = {
                     let ws_guard = ws_mgr.read().await;
-                    let Some(instance) = ws_guard.ws_sessions.get(&user_id) else {
+                    let Some(instance) = ws_guard.get(&user_id) else {
                         // Reachable if the client is dropped instantly
                         break;
                     };
@@ -422,7 +424,7 @@ impl SharifyWsInstance {
         let room_id = self.room_id;
 
         actix_rt::spawn(async move {
-            let mut interval = clock::interval(crate::DATA_FETCHING_INTERVAL);
+            let mut interval = time::interval(crate::DATA_FETCHING_INTERVAL);
 
             loop {
                 interval.tick().await;
@@ -467,6 +469,7 @@ impl SharifyWsInstance {
     ) {
         // Implicit copy to avoid self refs
         let room_id = self.room_id;
+        let weak_state_mgr = Arc::downgrade(&state_mgr);
 
         actix_rt::spawn(async move {
             let mut data_fetching_guard = crate::DATA_FETCHING_INTERVALS
@@ -484,21 +487,62 @@ impl SharifyWsInstance {
 
             drop(data_fetching_guard);
 
-            let mut interval = clock::interval(crate::SPOTIFY_FETCHING_INTERVAL);
+            if Self::send_spotify_state_in_room(
+                Arc::clone(&ws_mgr),
+                Arc::clone(&state_mgr),
+                room_id,
+                SPOTIFY_FETCH_PLAYBACK | SPOTIFY_FETCH_TRACKS_Q,
+            )
+            .await
+            .is_err()
+            {
+                // FIXME? UX related
+                // Most probably revoked tokens. They may have been refreshed from here but the
+                // client holds stale/outdated tokens
+                Self::close_room(
+                    ws_mgr,
+                    state_mgr,
+                    room_id,
+                    Some("Spotify request error. Closing room...".into()),
+                )
+                .await;
+
+                return;
+            }
+
+            let get_tick = async || {
+                Some(
+                    weak_state_mgr
+                        .upgrade()?
+                        .read()
+                        .await
+                        .get_room(&room_id)?
+                        .spotify_data_tick,
+                )
+            };
+
+            let Some(tick) = get_tick().await else {
+                return;
+            };
+
+            // TODO:
+            //   - Invalidate/Mutate the tick outside (when Seek, Play/Pause, Skip...)
+            //   (Do not invalidate the tick, set it to the default data fetch so it might be
+            //   played again from another source after a Pause from Sharify)
+            let mut sleep_fut = pin!(time::sleep_until(time::Instant::now() + tick));
 
             loop {
                 tokio::select! {
                     _ = rx.recv() => {
                         break;
                     }
-                    _ = interval.tick() => {
+                    _ = &mut sleep_fut => {
                         if Self::send_spotify_state_in_room(
                             Arc::clone(&ws_mgr),
                             Arc::clone(&state_mgr),
                             room_id,
-                            SPOTIFY_FETCH_PLAYBACK | SPOTIFY_FETCH_TRACKS_Q
+                            SPOTIFY_FETCH_PLAYBACK | SPOTIFY_FETCH_TRACKS_Q,
                         ).await.is_err() {
-                            // Most probably expired tokens
                             Self::close_room(
                                 ws_mgr,
                                 state_mgr,
@@ -508,6 +552,12 @@ impl SharifyWsInstance {
 
                             break;
                         }
+
+                        let Some(tick) = get_tick().await else {
+                            break;
+                        };
+
+                        sleep_fut.as_mut().reset(time::Instant::now() + tick);
                     }
                 }
             }
@@ -637,8 +687,22 @@ impl SharifyWsInstance {
             Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
-        if let Ok(Some(ref track)) = state {
-            let _ = guard.remove_track_from_queue(room_id, track.track_id.clone());
+        if let Ok(Some(ref playback)) = state {
+            if playback.is_playing
+                && let Some(progress_ms) = playback.progress_ms
+            {
+                let mut rest_ms = playback.duration_ms - progress_ms;
+
+                // If there's more than 2min left, add a fetch in the middle to keep sync with an
+                // external spotify client/player
+                if rest_ms > 1000 * 60 * 2 {
+                    rest_ms /= 2;
+                }
+
+                room.spotify_data_tick = Duration::from_millis(rest_ms + spotify::FETCH_OFFSET_MS);
+            }
+
+            let _ = guard.remove_track_from_queue(room_id, playback.track_id.clone());
         }
 
         Ok(CommandResponse {
@@ -791,7 +855,7 @@ impl SharifyWsInstance {
         buf: impl Into<web::Bytes>,
     ) -> bool {
         if session.binary(buf).await.is_err() {
-            ws_mgr.write().await.ws_sessions.remove(user_id);
+            ws_mgr.write().await.remove(user_id);
             return false;
         }
 
@@ -806,7 +870,6 @@ impl SharifyWsInstance {
         let ws_guard = ws_mgr.read().await;
 
         let room_users = ws_guard
-            .ws_sessions
             .iter()
             .filter_map(|(id, instance)| {
                 if instance.room_id == room_id {
@@ -846,7 +909,7 @@ impl SharifyWsInstance {
             ref session,
             room_id,
             ..
-        }) = ws_mgr.write().await.ws_sessions.remove(&user_id)
+        }) = ws_mgr.write().await.remove(&user_id)
         else {
             return;
         };
@@ -868,7 +931,6 @@ impl SharifyWsInstance {
         let mut ws_guard = ws_mgr.write().await;
 
         let room_users_id = ws_guard
-            .ws_sessions
             .iter()
             .filter_map(|(id, instance)| {
                 if instance.room_id == room_id {
@@ -880,7 +942,7 @@ impl SharifyWsInstance {
             .collect::<Vec<_>>();
 
         for room_user_id in room_users_id {
-            if let Some(instance) = ws_guard.ws_sessions.remove(&room_user_id) {
+            if let Some(instance) = ws_guard.remove(&room_user_id) {
                 let _ = instance
                     .session
                     .close(Some(CloseReason {

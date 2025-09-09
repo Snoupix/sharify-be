@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::proto::cmd::command;
 use crate::proto::cmd::command_response;
-use crate::sharify::room::RoomManager;
 use crate::sharify::room::{RoomError, RoomID, RoomUserID};
+use crate::sharify::room_manager::RoomManager;
 use crate::sharify::spotify::Spotify;
 use crate::sharify::utils::*;
 

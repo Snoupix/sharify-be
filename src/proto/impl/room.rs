@@ -2,7 +2,6 @@ use uuid::Uuid;
 
 use crate::proto;
 use crate::sharify::room;
-use crate::sharify::spotify::Spotify;
 
 impl From<room::LogType> for i32 {
     fn from(log: room::LogType) -> Self {
@@ -166,24 +165,6 @@ impl From<room::RoomUser> for proto::room::RoomUser {
             username: user.username,
             role_id: user.role_id.into_bytes().into(),
             is_connected: user.is_connected,
-        }
-    }
-}
-
-impl From<proto::room::Room> for room::Room {
-    fn from(room: proto::room::Room) -> Self {
-        Self {
-            id: Uuid::from_slice(&room.id[..16]).unwrap(),
-            name: room.name,
-            password: room.password,
-            users: room.users.into_iter().map(Into::into).collect(),
-            banned_users: room.banned_users,
-            role_manager: room.role_manager.map(Into::into).unwrap_or_default(),
-            tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
-            logs: room.logs.into_iter().map(Into::into).collect(),
-            max_users: room.max_users as _,
-            inactive_for: None,
-            spotify_handler: Spotify::default(),
         }
     }
 }
