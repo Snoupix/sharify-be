@@ -90,9 +90,14 @@ impl SharifyWsInstance {
 
         drop(state_guard);
 
-        let mut state_guard = state_mgr.write().await;
-        if let Err(e) = state_guard.set_ws_user_state(room_id, &user_id, true) {
-            return Ok(HttpResponse::InternalServerError().body(format!("{e:?}")));
+        {
+            if let Err(e) = state_mgr
+                .write()
+                .await
+                .set_ws_user_state(room_id, &user_id, true)
+            {
+                return Ok(HttpResponse::InternalServerError().body(format!("{e:?}")));
+            }
         }
 
         debug!(
