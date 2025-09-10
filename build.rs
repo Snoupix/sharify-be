@@ -10,8 +10,6 @@ const PROTOC_TS_PLUGIN: &str = concat!(
 );
 
 fn main() -> std::io::Result<()> {
-    println!("cargo::rerun-if-changed=build.rs");
-
     let mut protoc = prost_build::Config::new();
 
     let proto_files = fs::read_dir(PROTO_DIR)?

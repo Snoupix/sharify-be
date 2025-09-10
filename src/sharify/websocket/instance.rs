@@ -74,7 +74,7 @@ impl SharifyWsInstance {
         // if there's only one, that means its the owner/creator
         //
         // FIXME Caveat, when a single user in the room refreshes (so stays but re-init WS, it's
-        // true, so, wrong)
+        // true, so, wrong). It's because the room self destructs BUT after a timeout.
         let is_room_new = room.users.len() == 1;
 
         let Some(user) = room.users.iter().find(|e| e.id == user_id) else {
@@ -125,7 +125,20 @@ impl SharifyWsInstance {
         if is_room_new {
             // Avoid fetching anything with Spotify on integration/unit tests
             if !cfg!(test) {
-                _self.init_spotify_data_loop(Arc::clone(&ws_mgr), Arc::clone(&state_mgr));
+                // FIXME? ATM 5 is kinda arbitrary to avoid senders to be blocked but I may have to
+                // think deeper about this buffer len
+                let (tx, rx) = mpsc::channel(5);
+
+                {
+                    state_mgr
+                        .write()
+                        .await
+                        .get_room_mut(&room_id)
+                        .expect("Unreachable error: Room should exists")
+                        .init_spotify_tick_tx(tx);
+                }
+
+                _self.init_spotify_data_loop(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), rx);
             }
 
             _self.init_room_activity_check_loop(Arc::clone(&state_mgr));
@@ -466,10 +479,10 @@ impl SharifyWsInstance {
         &self,
         ws_mgr: Arc<RwLock<SharifyWsManager>>,
         state_mgr: Arc<RwLock<RoomManager>>,
+        mut tick_rx: mpsc::Receiver<Duration>,
     ) {
         // Implicit copy to avoid self refs
         let room_id = self.room_id;
-        let weak_state_mgr = Arc::downgrade(&state_mgr);
 
         actix_rt::spawn(async move {
             let mut data_fetching_guard = crate::DATA_FETCHING_INTERVALS
@@ -497,8 +510,8 @@ impl SharifyWsInstance {
             .is_err()
             {
                 // FIXME? UX related
-                // Most probably revoked tokens. They may have been refreshed from here but the
-                // client holds stale/outdated tokens
+                // Most probably revoked tokens. They may have been refreshed from here or
+                // elsewhere but the client holds stale/outdated tokens
                 Self::close_room(
                     ws_mgr,
                     state_mgr,
@@ -510,31 +523,29 @@ impl SharifyWsInstance {
                 return;
             }
 
-            let get_tick = async || {
-                Some(
-                    weak_state_mgr
-                        .upgrade()?
-                        .read()
-                        .await
-                        .get_room(&room_id)?
-                        .spotify_data_tick,
-                )
-            };
-
-            let Some(tick) = get_tick().await else {
-                return;
-            };
-
             // TODO:
             //   - Invalidate/Mutate the tick outside (when Seek, Play/Pause, Skip...)
             //   (Do not invalidate the tick, set it to the default data fetch so it might be
             //   played again from another source after a Pause from Sharify)
-            let mut sleep_fut = pin!(time::sleep_until(time::Instant::now() + tick));
+            let mut sleep_fut = pin!(time::sleep_until(
+                time::Instant::now() + spotify::DEFAULT_DATA_INTERVAL
+            ));
 
             loop {
                 tokio::select! {
+                    biased;
+
                     _ = rx.recv() => {
                         break;
+                    }
+                    myb_tick = tick_rx.recv() => {
+                        match myb_tick {
+                            Some(tick) => {
+                                sleep_fut.as_mut().reset(time::Instant::now() + tick);
+                                continue;
+                            }
+                            None => break,
+                        }
                     }
                     _ = &mut sleep_fut => {
                         if Self::send_spotify_state_in_room(
@@ -552,12 +563,6 @@ impl SharifyWsInstance {
 
                             break;
                         }
-
-                        let Some(tick) = get_tick().await else {
-                            break;
-                        };
-
-                        sleep_fut.as_mut().reset(time::Instant::now() + tick);
                     }
                 }
             }
@@ -699,7 +704,8 @@ impl SharifyWsInstance {
                     rest_ms /= 2;
                 }
 
-                room.spotify_data_tick = Duration::from_millis(rest_ms + spotify::FETCH_OFFSET_MS);
+                room.set_spotify_tick(Duration::from_millis(rest_ms + spotify::FETCH_OFFSET_MS))
+                    .await;
             }
 
             let _ = guard.remove_track_from_queue(room_id, playback.track_id.clone());
