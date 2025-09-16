@@ -1,0 +1,29 @@
+# This docker-compose file assumes that the CWD is a dir with 2 sub-directories:
+# - front/ which is https://github.com/Snoupix/sharify
+# - back/ which is https://github.com/Snoupix/sharify-be
+#
+# Note: Since the back is a HTTP server **with** TLS, the front cannot fetch
+# it with an internal network except if your cert has DNS https://backend:PORT handled.
+# The front needs the fullchain.pem part of the back's cert so it can be trusted on fetch calls
+
+services:
+  backend:
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+    ports:
+      - "3100:3100"
+
+  frontend:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    env_file:
+      - ./front/.env
+    environment:
+      - ORIGIN=https://sharify.snoupix.dev
+      - NODE_EXTRA_CA_CERTS=fullchain.pem
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
