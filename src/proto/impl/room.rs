@@ -169,6 +169,12 @@ impl From<room::RoomUser> for proto::room::RoomUser {
     }
 }
 
+impl From<proto::room::Room> for room::Room {
+    fn from(room: proto::room::Room) -> Self {
+        Self::from_proto_unsafe(room)
+    }
+}
+
 impl From<room::Room> for proto::room::Room {
     fn from(room: room::Room) -> Self {
         Self {

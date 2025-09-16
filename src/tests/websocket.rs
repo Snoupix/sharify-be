@@ -21,7 +21,7 @@ static NEXT_ROOM_ID: AtomicU8 = AtomicU8::new(1);
 async fn run_server_with_timeout(seconds: u64, mut cancel_rx: mpsc::Receiver<()>) {
     actix_rt::spawn(async move {
         tokio::select! {
-            timeout = time::timeout(Duration::from_secs(seconds), crate::serve()) => {
+            timeout = time::timeout(Duration::from_secs(seconds), crate::serve(false)) => {
                 if timeout.is_err() {
                     panic!("Timeout hit during test");
                 }

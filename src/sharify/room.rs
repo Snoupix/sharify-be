@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::proto;
+
 use super::role::RoleManager;
 use super::room_metadata::*;
 use super::spotify::{SpotifyTokens, Timestamp};
@@ -117,6 +119,24 @@ pub enum RoomError {
 }
 
 impl Room {
+    /// This is a helper fn to create a Room struct from a proto Room
+    /// but unsafe to use because of partially uninitialized fields.
+    /// This is for testing purposes only
+    pub fn from_proto_unsafe(room: proto::room::Room) -> Self {
+        Self {
+            id: Uuid::from_slice(&room.id[..16]).unwrap_or_default(),
+            name: room.name,
+            password: room.password,
+            users: room.users.into_iter().map(Into::into).collect(),
+            banned_users: room.banned_users,
+            role_manager: room.role_manager.map(Into::into).unwrap_or_default(),
+            tracks_queue: room.tracks_queue.into_iter().map(Into::into).collect(),
+            logs: room.logs.into_iter().map(Into::into).collect(),
+            max_users: room.max_users as _,
+            metadata: RoomMetadata::new(SpotifyTokens::default()),
+        }
+    }
+
     pub fn to_json(&self) -> Value {
         json!(self)
     }

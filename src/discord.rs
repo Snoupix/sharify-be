@@ -1,11 +1,16 @@
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
 use serde_json::json;
 
-static CLIENT: OnceLock<Client> = OnceLock::new();
+static CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    ClientBuilder::new()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build HTTP Client")
+});
 
 #[derive(Deserialize)]
 pub struct SendWebhookPayload {
@@ -28,17 +33,8 @@ impl std::fmt::Display for WebhookType {
     }
 }
 
-fn init_client() -> Client {
-    ClientBuilder::new()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to build HTTP Client")
-}
-
 pub async fn send_webhook(wh_type: WebhookType, content: String) -> Result<(), String> {
     let webhook = dotenvy::var("DISCORD_WEBHOOK").expect("DISCORD_WEBOOK env var not found");
-
-    let client = CLIENT.get_or_init(init_client);
 
     let ts = chrono::Utc::now();
 
@@ -59,7 +55,7 @@ pub async fn send_webhook(wh_type: WebhookType, content: String) -> Result<(), S
         }]
     });
 
-    let req = client
+    let req = CLIENT
         .post(webhook)
         .header("Content-Type", "application/json")
         .json(&payload)

@@ -532,6 +532,7 @@ impl SharifyWsInstance {
             //   - Invalidate/Mutate the tick outside (when Seek, Play/Pause, Skip...)
             //   (Do not invalidate the tick, set it to the default data fetch so it might be
             //   played again from another source after a Pause from Sharify)
+            //   - What should update (and how) the sleeper
             let mut sleep_fut = pin!(time::sleep_until(
                 time::Instant::now() + spotify::DEFAULT_DATA_INTERVAL
             ));
@@ -823,8 +824,23 @@ impl SharifyWsInstance {
             Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
-        if let Ok(Some(ref track)) = state {
-            let _ = guard.remove_track_from_queue(room_id, track.track_id.clone());
+        if let Ok(Some(ref playback)) = state {
+            if playback.is_playing
+                && let Some(progress_ms) = playback.progress_ms
+            {
+                let mut rest_ms = playback.duration_ms - progress_ms;
+
+                // If there's more than 2min left, add a fetch in the middle to keep sync with an
+                // external spotify client/player
+                if rest_ms > 1000 * 60 * 2 {
+                    rest_ms /= 2;
+                }
+
+                room.set_spotify_tick(Duration::from_millis(rest_ms + spotify::FETCH_OFFSET_MS))
+                    .await;
+            }
+
+            let _ = guard.remove_track_from_queue(room_id, playback.track_id.clone());
         }
 
         Ok(CommandResponse {
