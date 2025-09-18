@@ -712,6 +712,10 @@ impl SharifyWsInstance {
 
                 room.set_spotify_tick(Duration::from_millis(rest_ms + spotify::FETCH_OFFSET_MS))
                     .await;
+            } else {
+                // Playtrack is not playing
+                room.set_spotify_tick(spotify::DEFAULT_DATA_INTERVAL)
+                    .await;
             }
 
             let _ = guard.remove_track_from_queue(room_id, playback.track_id.clone());

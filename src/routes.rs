@@ -111,6 +111,13 @@ pub async fn proto_command(
             user_id,
             username,
         }) => {
+            if room_id.len() < 16 {
+                return match create_error_response("Room ID is an invalid UUID") {
+                    Err(err) => HttpResponse::InternalServerError().body(err),
+                    Ok(buf) => HttpResponse::BadRequest().body(buf),
+                };
+            }
+
             let mut state_guard = sharify_state.write().await;
             let Ok(uuid) = Uuid::from_slice(&room_id[..16]) else {
                 return match create_error_response("Wrong UUID format") {
