@@ -1,7 +1,7 @@
 # https://just.systems/man/en/
 
 @fmt:
-    cargo fmt
+    -cargo fmt
 
 @build: fmt
     cargo build

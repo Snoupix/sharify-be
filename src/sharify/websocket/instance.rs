@@ -129,7 +129,7 @@ impl SharifyWsInstance {
         // WS Instance scoped thread(s)
         this.init_main_loop(stream, user_id.clone());
 
-        this.send_data_when_ready(user_id.clone(), !are_room_threads_init);
+        this.send_data_when_ready(user_id.clone());
 
         // Room scoped thread(s)
         if !are_room_threads_init {
@@ -384,7 +384,7 @@ impl SharifyWsInstance {
         true
     }
 
-    fn send_data_when_ready(&self, user_id: RoomUserID, include_spotify_data: bool) {
+    fn send_data_when_ready(&self, user_id: RoomUserID) {
         let ws_mgr = Arc::clone(&self.ws_mgr);
         let state_mgr = Arc::clone(&self.state_mgr);
 
@@ -413,8 +413,7 @@ impl SharifyWsInstance {
 
                 let mut buf = Vec::new();
 
-                if include_spotify_data
-                    && let Err(err) = Self::send_spotify_state_in_room(
+                if let Err(err) = Self::send_spotify_state_in_room(
                         Arc::clone(&ws_mgr),
                         Arc::clone(&state_mgr),
                         room_id,
