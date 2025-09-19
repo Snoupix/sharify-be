@@ -13,7 +13,9 @@ pub fn create_error_response(error: impl Into<String>) -> Result<Vec<u8>, String
 
     let mut buf = Vec::new();
     if let Err(err) = proto_cmd.encode(&mut buf) {
-        return Err(format!("Unexpected error while encoding newly created CommandResponse to protobuf command: {err}"));
+        return Err(format!(
+            "Unexpected error while encoding newly created CommandResponse to protobuf command: {err}"
+        ));
     }
 
     Ok(buf)

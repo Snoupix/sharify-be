@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use rand::distr::Alphanumeric;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use uuid::Uuid;
 
 use super::role::*;
@@ -243,13 +243,17 @@ impl RoomManager {
         // TODO: These are considered unrecoverable errors but at the Room' scope, not the app's
         // So destroy the room instead of crashing the app
         let Some(author) = room.users.iter().find(|c| c.id == *author_id).cloned() else {
-            error!("Unexpected error: Kick attempt from author id {author_id} that's not in the room id {room_id}");
+            error!(
+                "Unexpected error: Kick attempt from author id {author_id} that's not in the room id {room_id}"
+            );
             dbg!(room);
 
             return Err(RoomError::Unreachable);
         };
         let Some(user) = room.users.iter().find(|c| c.id == *user_id).cloned() else {
-            error!("Unexpected error: Attempt to kick a user id {user_id} that's not in the room id {room_id}");
+            error!(
+                "Unexpected error: Attempt to kick a user id {user_id} that's not in the room id {room_id}"
+            );
             dbg!(room);
 
             return Err(RoomError::Unreachable);
@@ -285,12 +289,16 @@ impl RoomManager {
         // TODO: These are considered unrecoverable errors but at the Room' scope, not the app's
         // So destroy the room instead of crashing the app
         let Some(author) = room.users.iter().find(|c| c.id == *author_id).cloned() else {
-            error!("Unexpected error: Ban attempt from author id {author_id} that's not in the room id {room_id}");
+            error!(
+                "Unexpected error: Ban attempt from author id {author_id} that's not in the room id {room_id}"
+            );
 
             return Err(RoomError::Unreachable);
         };
         let Some(user) = room.users.iter().find(|c| c.id == *user_id).cloned() else {
-            error!("Unexpected error: Attempt to ban a user id {user_id} that's not in the room id {room_id}");
+            error!(
+                "Unexpected error: Attempt to ban a user id {user_id} that's not in the room id {room_id}"
+            );
 
             return Err(RoomError::Unreachable);
         };

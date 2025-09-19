@@ -9,12 +9,12 @@ use actix_web::{HttpRequest, HttpResponse, Responder};
 use actix_ws::{AggregatedMessage, AggregatedMessageStream, CloseCode, CloseReason, Session};
 use chrono::TimeDelta;
 use prost::Message as _;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 use super::commands::{Command as WSCmd, StateImpact};
 use crate::match_flags;
-use crate::proto::cmd::{command, command_response, Command, CommandResponse};
-use crate::sharify::room::{RoomError, RoomID, RoomUserID, INACTIVE_ROOM_MINS};
+use crate::proto::cmd::{Command, CommandResponse, command, command_response};
+use crate::sharify::room::{INACTIVE_ROOM_MINS, RoomError, RoomID, RoomUserID};
 use crate::sharify::room_manager::RoomManager;
 use crate::sharify::spotify::{self, SpotifyError};
 use crate::sharify::utils::*;
@@ -31,6 +31,9 @@ pub struct SharifyWsInstance {
     // This is true when the Client responded at the first ping
     // sent so the instance can recieve its initial data
     is_ready: bool,
+
+    ws_mgr: Arc<RwLock<SharifyWsManager>>,
+    state_mgr: Arc<RwLock<RoomManager>>,
 }
 
 impl std::fmt::Debug for SharifyWsInstance {
@@ -48,12 +51,19 @@ impl std::fmt::Debug for SharifyWsInstance {
 pub type SharifyWsManager = HashMap<RoomUserID, SharifyWsInstance>;
 
 impl SharifyWsInstance {
-    fn new(room_id: RoomID, session: Session) -> Self {
+    fn new(
+        room_id: RoomID,
+        session: Session,
+        ws_mgr: Arc<RwLock<SharifyWsManager>>,
+        state_mgr: Arc<RwLock<RoomManager>>,
+    ) -> Self {
         SharifyWsInstance {
-            session,
-            room_id,
             hb: Arc::new(Mutex::new(Instant::now())),
             is_ready: false,
+            room_id,
+            session,
+            ws_mgr,
+            state_mgr,
         }
     }
 
@@ -70,12 +80,7 @@ impl SharifyWsInstance {
             return Ok(HttpResponse::BadRequest().body(format!("Room {} does not exist", room_id)));
         };
 
-        // Logically, a room cannot be empty because it self destructs when the last one leaves so
-        // if there's only one, that means its the owner/creator
-        //
-        // FIXME Caveat, when a single user in the room refreshes (so stays but re-init WS, it's
-        // true, so, wrong). It's because the room self destructs BUT after a timeout.
-        let is_room_new = room.users.len() == 1;
+        let are_room_threads_init = room.are_threads_initiated;
 
         let Some(user) = room.users.iter().find(|e| e.id == user_id) else {
             // User should have joined the room before WS init
@@ -91,12 +96,17 @@ impl SharifyWsInstance {
         drop(state_guard);
 
         {
-            if let Err(e) = state_mgr
-                .write()
-                .await
-                .set_ws_user_state(room_id, &user_id, true)
-            {
+            let mut state_guard = state_mgr.write().await;
+
+            if let Err(e) = state_guard.set_ws_user_state(room_id, &user_id, true) {
                 return Ok(HttpResponse::InternalServerError().body(format!("{e:?}")));
+            }
+
+            if !are_room_threads_init {
+                state_guard
+                    .get_room_mut(&room_id)
+                    .unwrap()
+                    .are_threads_initiated = true;
             }
         }
 
@@ -106,28 +116,23 @@ impl SharifyWsInstance {
         );
 
         let (res, session, stream) = actix_ws::handle(&req, body)?;
-        let _self = Self::new(room_id, session);
+        let this = Self::new(
+            room_id,
+            session,
+            Arc::clone(&ws_mgr),
+            Arc::clone(&state_mgr),
+        );
 
         // max 128kb stream
         let stream = stream.max_frame_size(1024 * 128).aggregate_continuations();
 
         // WS Instance scoped thread(s)
-        _self.init_main_loop(
-            Arc::clone(&ws_mgr),
-            Arc::clone(&state_mgr),
-            stream,
-            user_id.clone(),
-        );
+        this.init_main_loop(stream, user_id.clone());
 
-        _self.send_data_when_ready(
-            Arc::clone(&ws_mgr),
-            Arc::clone(&state_mgr),
-            user_id.clone(),
-            !is_room_new,
-        );
+        this.send_data_when_ready(user_id.clone(), !are_room_threads_init);
 
         // Room scoped thread(s)
-        if is_room_new {
+        if !are_room_threads_init {
             // Avoid fetching anything with Spotify on integration/unit tests
             if !cfg!(test) {
                 // FIXME? ATM 5 is kinda arbitrary to avoid senders to be blocked but I may have to
@@ -143,10 +148,10 @@ impl SharifyWsInstance {
                         .init_spotify_tick_tx(tx);
                 }
 
-                _self.init_spotify_data_loop(Arc::clone(&ws_mgr), Arc::clone(&state_mgr), rx);
+                this.init_spotify_data_loop(rx);
             }
 
-            _self.init_room_activity_check_loop(Arc::clone(&state_mgr));
+            this.init_room_activity_check_loop();
 
         // New Room user entered
         } else {
@@ -161,20 +166,16 @@ impl SharifyWsInstance {
             Self::send_in_room(Arc::clone(&ws_mgr), room_id, buf).await;
         }
 
-        ws_mgr.write().await.insert(user_id, _self);
+        ws_mgr.write().await.insert(user_id, this);
 
         Ok(res)
     }
 
     /// Handles MessageAggregator (so, Message stream) and Heartbeat
     /// intervals with a priority for message handling
-    fn init_main_loop(
-        &self,
-        ws_mgr: Arc<RwLock<SharifyWsManager>>,
-        state_mgr: Arc<RwLock<RoomManager>>,
-        mut stream: AggregatedMessageStream,
-        user_id: RoomUserID,
-    ) {
+    fn init_main_loop(&self, mut stream: AggregatedMessageStream, user_id: RoomUserID) {
+        let ws_mgr = Arc::clone(&self.ws_mgr);
+        let state_mgr = Arc::clone(&self.state_mgr);
         let mut interval = time::interval(HEARTBEAT_INTERVAL);
         let hb = Arc::clone(&self.hb);
         let mut session = self.session.clone();
@@ -383,13 +384,10 @@ impl SharifyWsInstance {
         true
     }
 
-    fn send_data_when_ready(
-        &self,
-        ws_mgr: Arc<RwLock<SharifyWsManager>>,
-        state_mgr: Arc<RwLock<RoomManager>>,
-        user_id: RoomUserID,
-        include_spotify_data: bool,
-    ) {
+    fn send_data_when_ready(&self, user_id: RoomUserID, include_spotify_data: bool) {
+        let ws_mgr = Arc::clone(&self.ws_mgr);
+        let state_mgr = Arc::clone(&self.state_mgr);
+
         actix_rt::spawn(async move {
             let mut interval = time::interval(Duration::from_millis(500));
 
@@ -438,8 +436,9 @@ impl SharifyWsInstance {
         });
     }
 
-    fn init_room_activity_check_loop(&self, state_mgr: Arc<RwLock<RoomManager>>) {
+    fn init_room_activity_check_loop(&self) {
         let room_id = self.room_id;
+        let state_mgr = Arc::clone(&self.state_mgr);
 
         actix_rt::spawn(async move {
             let mut interval = time::interval(crate::DATA_FETCHING_INTERVAL);
@@ -480,14 +479,11 @@ impl SharifyWsInstance {
         });
     }
 
-    fn init_spotify_data_loop(
-        &self,
-        ws_mgr: Arc<RwLock<SharifyWsManager>>,
-        state_mgr: Arc<RwLock<RoomManager>>,
-        mut tick_rx: mpsc::Receiver<Duration>,
-    ) {
+    fn init_spotify_data_loop(&self, mut tick_rx: mpsc::Receiver<Duration>) {
         // Implicit copy to avoid self refs
         let room_id = self.room_id;
+        let ws_mgr = Arc::clone(&self.ws_mgr);
+        let state_mgr = Arc::clone(&self.state_mgr);
 
         actix_rt::spawn(async move {
             let mut data_fetching_guard = crate::DATA_FETCHING_INTERVALS
@@ -496,7 +492,9 @@ impl SharifyWsInstance {
                 .await;
 
             if data_fetching_guard.contains_key(&room_id) {
-                error!("Unexpected error: Trying to start a spotify data loop while it already exists on that room id");
+                error!(
+                    "Unexpected error: Trying to start a spotify data loop while it already exists on that room id"
+                );
                 return;
             }
 
@@ -714,8 +712,7 @@ impl SharifyWsInstance {
                     .await;
             } else {
                 // Playtrack is not playing
-                room.set_spotify_tick(spotify::DEFAULT_DATA_INTERVAL)
-                    .await;
+                room.set_spotify_tick(spotify::DEFAULT_DATA_INTERVAL).await;
             }
 
             let _ = guard.remove_track_from_queue(room_id, playback.track_id.clone());

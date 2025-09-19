@@ -1,8 +1,8 @@
 pub mod web_utils;
 
 use std::num::ParseIntError;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, TimeZone as _, Utc};
@@ -283,7 +283,9 @@ impl Spotify {
         let body: serde_json::Value = match res.json().await {
             Ok(v) => v,
             Err(err) => {
-                debug!("Failed to parse current playback state json result (probably empty body because client is not playing): {err}");
+                debug!(
+                    "Failed to parse current playback state json result (probably empty body because client is not playing): {err}"
+                );
                 return Ok(None);
             }
         };

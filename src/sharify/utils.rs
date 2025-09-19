@@ -1,10 +1,10 @@
-use base64::prelude::BASE64_URL_SAFE;
 use base64::Engine as _;
+use base64::prelude::BASE64_URL_SAFE;
 use rand::distr::Alphanumeric;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use sha2::{Digest, Sha256};
 
-use super::room::{RoomUserID, MAX_EMAIL_CHAR, MIN_EMAIL_CHAR};
+use super::room::{MAX_EMAIL_CHAR, MIN_EMAIL_CHAR, RoomUserID};
 
 #[macro_export]
 macro_rules! match_flags {

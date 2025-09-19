@@ -9,7 +9,7 @@ use reqwest_websocket::{CloseCode, Message, RequestBuilderExt};
 use tokio::sync::mpsc;
 
 use crate::proto::cmd::{
-    command, command_response, http_command, Command, CommandResponse, HttpCommand,
+    Command, CommandResponse, HttpCommand, command, command_response, http_command,
 };
 use crate::sharify::room::Room;
 use crate::sharify::utils;
@@ -93,10 +93,11 @@ async fn create_room_impl(sv_timeout: u64) -> (mpsc::Sender<()>, Client, Room) {
     let res = CommandResponse::decode(req.bytes().await.expect("Failed to get response bytes"))
         .expect("Failed to decode respones into Protobuf CommandResponse");
 
-    assert!(res
-        .r#type
-        .as_ref()
-        .is_some_and(|t| matches!(t, command_response::Type::Room(_))));
+    assert!(
+        res.r#type
+            .as_ref()
+            .is_some_and(|t| matches!(t, command_response::Type::Room(_)))
+    );
 
     let command_response::Type::Room(room) = res.r#type.unwrap() else {
         unreachable!();
@@ -164,10 +165,11 @@ async fn create_room_and_get_room_via_ws() {
         let cmd = CommandResponse::decode(bytes)
             .expect("Failed to decode received bytes into CommandResponse");
 
-        assert!(cmd
-            .r#type
-            .as_ref()
-            .is_some_and(|t| matches!(t, command_response::Type::Room(_))));
+        assert!(
+            cmd.r#type
+                .as_ref()
+                .is_some_and(|t| matches!(t, command_response::Type::Room(_)))
+        );
 
         let Some(command_response::Type::Room(proto_room)) = cmd.r#type else {
             unreachable!();

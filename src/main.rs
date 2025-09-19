@@ -18,9 +18,9 @@ use std::time::Duration;
 use actix_cors::Cors;
 use actix_governor::{Governor, GovernorConfigBuilder};
 use actix_web::middleware;
-use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
+use actix_web::{App, HttpResponse, HttpServer, middleware::Logger, web};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc};
 
 use sharify::room::RoomID;
 use sharify::room_manager::RoomManager;

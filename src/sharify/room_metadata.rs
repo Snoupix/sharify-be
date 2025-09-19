@@ -6,6 +6,7 @@ use super::spotify::{Spotify, SpotifyTokens};
 
 #[derive(Clone, Debug)]
 pub struct RoomMetadata {
+    pub are_threads_initiated: bool,
     pub inactive_for: Option<Instant>,
     pub spotify_handler: Spotify,
 
@@ -15,6 +16,7 @@ pub struct RoomMetadata {
 impl RoomMetadata {
     pub fn new(spotify_tokens: SpotifyTokens) -> Self {
         Self {
+            are_threads_initiated: false,
             spotify_handler: Spotify::new(spotify_tokens),
             inactive_for: None,
             spotify_data_sleeper: None,
@@ -34,6 +36,8 @@ impl RoomMetadata {
             return;
         }
 
-        error!("Unreachable error: Trying to set the sleep duration when it has not been (yet) defined");
+        error!(
+            "Unreachable error: Trying to set the sleep duration when it has not been (yet) defined"
+        );
     }
 }

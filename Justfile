@@ -1,6 +1,9 @@
 # https://just.systems/man/en/
 
-@build:
+@fmt:
+    cargo fmt
+
+@build: fmt
     cargo build
     cp -R proto_ts/* ../sharify/src/lib/proto
 
