@@ -63,4 +63,8 @@ enum LogType {
   OTHER = 0;
   KICK = 1;
   BAN = 2;
+  ADD_TRACK = 3;
+  JOIN_ROOM = 4;
+  LEAVE_ROOM = 5;
+  USERNAME_CHANGE = 6;
 }

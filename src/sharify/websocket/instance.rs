@@ -414,12 +414,12 @@ impl SharifyWsInstance {
                 let mut buf = Vec::new();
 
                 if let Err(err) = Self::send_spotify_state_in_room(
-                        Arc::clone(&ws_mgr),
-                        Arc::clone(&state_mgr),
-                        room_id,
-                        SPOTIFY_FETCH_TRACKS_Q | SPOTIFY_FETCH_PLAYBACK,
-                    )
-                    .await
+                    Arc::clone(&ws_mgr),
+                    Arc::clone(&state_mgr),
+                    room_id,
+                    SPOTIFY_FETCH_TRACKS_Q | SPOTIFY_FETCH_PLAYBACK,
+                )
+                .await
                 {
                     let cmd = CommandResponse {
                         r#type: Some(err.into()),

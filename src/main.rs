@@ -55,6 +55,7 @@ async fn serve(is_prod: bool) -> std::io::Result<()> {
 
     // TODO: If behind a (reverse) proxy, change the key extractor because the peer IP will be the same
     // https://docs.rs/actix-governor/latest/actix_governor/struct.PeerIpKeyExtractor.html
+    // https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/#passing-request-headers
     let governor_conf = GovernorConfigBuilder::default()
         .burst_size(10)
         .seconds_per_request(2)

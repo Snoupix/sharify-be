@@ -177,13 +177,13 @@ impl RoomManager {
 
     pub fn add_track_to_queue(
         &mut self,
-        id: RoomID,
+        room_id: RoomID,
         user_id: RoomUserID,
         track_id: String,
         track_name: String,
         track_duration: u32,
     ) -> Result<(), RoomError> {
-        let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         let user = room
             .users
@@ -200,8 +200,18 @@ impl RoomManager {
 
         debug!(
             "{} added {} to room {} {}",
-            user.username, track_name, room.name, id
+            user.username, track_name, room.name, room_id
         );
+
+        let username = user.username.clone();
+
+        self.append_log(
+            room_id,
+            Log::new(
+                LogType::AddTrack,
+                format!("User \"{}\" added \"{}\" to queue", username, track_name),
+            ),
+        )?;
 
         Ok(())
     }
@@ -209,10 +219,10 @@ impl RoomManager {
     /// Sort of fail-free fn that can be ran each time Spotify current playback is fetched
     pub fn remove_track_from_queue(
         &mut self,
-        id: RoomID,
+        room_id: RoomID,
         track_id: String,
     ) -> Result<(), RoomError> {
-        let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         if room
             .tracks_queue
@@ -373,6 +383,14 @@ impl RoomManager {
 
         self.user_ids.insert(user_id);
 
+        self.append_log(
+            room_id,
+            Log::new(
+                LogType::JoinRoom,
+                format!("User \"{}\" joined the room", username),
+            ),
+        )?;
+
         Ok(room)
     }
 
@@ -398,6 +416,14 @@ impl RoomManager {
         );
 
         self.user_ids.remove(&user.id);
+
+        self.append_log(
+            room_id,
+            Log::new(
+                LogType::LeaveRoom,
+                format!("User \"{}\" left the room", user.username),
+            ),
+        )?;
 
         Ok(())
     }
@@ -525,11 +551,11 @@ impl RoomManager {
 
     pub fn change_username(
         &mut self,
-        id: RoomID,
+        room_id: RoomID,
         user_id: RoomUserID,
         username: String,
     ) -> Result<(), RoomError> {
-        let room = self.get_room_mut(&id).ok_or(RoomError::RoomNotFound)?;
+        let room = self.get_room_mut(&room_id).ok_or(RoomError::RoomNotFound)?;
 
         let user = room
             .users
@@ -537,7 +563,20 @@ impl RoomManager {
             .find(|c| c.id == user_id)
             .ok_or(RoomError::RoomUserNotFound)?;
 
+        let old_username = user.username.clone();
+
         user.username.clone_from(&username);
+
+        self.append_log(
+            room_id,
+            Log::new(
+                LogType::UsernameChange,
+                format!(
+                    "User \"{}\" changed its username to \"{}\"",
+                    old_username, username
+                ),
+            ),
+        )?;
 
         Ok(())
     }

@@ -54,6 +54,10 @@ pub enum LogType {
     Other,
     Kick,
     Ban,
+    AddTrack,
+    JoinRoom,
+    LeaveRoom,
+    UsernameChange,
 }
 
 impl Log {

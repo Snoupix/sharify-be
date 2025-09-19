@@ -9,6 +9,10 @@ impl From<room::LogType> for i32 {
             room::LogType::Other => 0,
             room::LogType::Kick => 1,
             room::LogType::Ban => 2,
+            room::LogType::AddTrack => 3,
+            room::LogType::JoinRoom => 4,
+            room::LogType::LeaveRoom => 5,
+            room::LogType::UsernameChange => 6,
         }
     }
 }
@@ -19,6 +23,10 @@ impl From<i32> for room::LogType {
             0 => Self::Other,
             1 => Self::Kick,
             2 => Self::Ban,
+            3 => Self::AddTrack,
+            4 => Self::JoinRoom,
+            5 => Self::LeaveRoom,
+            6 => Self::UsernameChange,
             _ => unreachable!(),
         }
     }
