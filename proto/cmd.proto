@@ -76,6 +76,8 @@ message Command {
 
   message AddTrackToQueue {
     string track_id = 1;
+    string track_name = 2;
+    uint32 track_duration = 3;
   }
 
   message CreateRole {

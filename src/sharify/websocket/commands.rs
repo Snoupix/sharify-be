@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::proto::cmd::command;
 use crate::proto::cmd::command_response;
-use crate::sharify::room::{RoomError, RoomID, RoomUserID};
+use crate::sharify::room::{RoomError, RoomID, RoomTrack, RoomUserID};
 use crate::sharify::room_manager::RoomManager;
 use crate::sharify::spotify::Spotify;
 use crate::sharify::utils::*;
@@ -25,7 +25,7 @@ trait Commands {
 
     async fn get_room(self) -> Self::Output;
     async fn search(self, name: String) -> Self::Output;
-    async fn add_to_queue(self, track: command::AddTrackToQueue) -> Self::Output;
+    async fn add_to_queue(self, opts: command::AddTrackToQueue) -> Self::Output;
     async fn set_volume(self, percentage: u8) -> Self::Output;
     async fn play_resume(self) -> Self::Output;
     async fn pause(self) -> Self::Output;
@@ -44,6 +44,7 @@ pub struct Command {
     sharify_state: Arc<RwLock<RoomManager>>,
     user_id: RoomUserID,
     room_id: RoomID,
+    cmd_type: command::Type,
 }
 
 impl Command {
@@ -51,11 +52,13 @@ impl Command {
         sharify_state: Arc<RwLock<RoomManager>>,
         author_id: RoomUserID,
         room_id: RoomID,
+        cmd_type: command::Type,
     ) -> Self {
         Self {
             sharify_state,
             user_id: author_id,
             room_id,
+            cmd_type,
         }
     }
 
@@ -73,12 +76,11 @@ impl Command {
     /// has no real sense because the command shouldn't have affected any state
     pub async fn process(
         self,
-        cmd_type: command::Type,
     ) -> (
         Result<Option<command_response::Type>, command_response::Type>,
         StateImpact,
     ) {
-        if !self.has_permission_to(&cmd_type).await {
+        if !self.has_permission_to().await {
             return (
                 Err(command_response::Type::RoomError(
                     RoomError::Unauthorized.into(),
@@ -87,35 +89,10 @@ impl Command {
             );
         }
 
-        let cmd_impact = match &cmd_type {
-            command::Type::GetRoom(_) | command::Type::Search(_) => StateImpact::Nothing,
-            command::Type::DeleteRole(_)
-            | command::Type::CreateRole(_)
-            | command::Type::RenameRole(_)
-            | command::Type::LeaveRoom(_)
-            | command::Type::Kick(_)
-            | command::Type::Ban(_) => StateImpact::Room,
-            command::Type::AddToQueue(_)
-            | command::Type::SetVolume(_)
-            | command::Type::PlayResume(_)
-            | command::Type::Pause(_)
-            | command::Type::SkipNext(_)
-            | command::Type::SkipPrevious(_)
-            | command::Type::SeekToPos(_) => StateImpact::Both(match &cmd_type {
-                command::Type::AddToQueue(_) => SPOTIFY_FETCH_TRACKS_Q,
-                command::Type::SetVolume(_)
-                | command::Type::PlayResume(_)
-                | command::Type::Pause(_)
-                | command::Type::SeekToPos(_) => SPOTIFY_FETCH_PLAYBACK,
-                command::Type::SkipNext(_) | command::Type::SkipPrevious(_) => {
-                    SPOTIFY_FETCH_TRACKS_Q | SPOTIFY_FETCH_PLAYBACK
-                }
-                _ => unreachable!(),
-            }),
-        };
+        let cmd_impact = self.get_cmd_impact();
 
         (
-            match cmd_type {
+            match self.cmd_type.clone() {
                 command::Type::GetRoom(_) => self.get_room().await,
                 command::Type::Search(name) => self.search(name).await,
                 command::Type::AddToQueue(room_track) => self.add_to_queue(room_track).await,
@@ -136,7 +113,36 @@ impl Command {
         )
     }
 
-    async fn has_permission_to(&self, cmd_type: &command::Type) -> bool {
+    fn get_cmd_impact(&self) -> StateImpact {
+        match &self.cmd_type {
+            command::Type::GetRoom(_) | command::Type::Search(_) => StateImpact::Nothing,
+            command::Type::DeleteRole(_)
+            | command::Type::CreateRole(_)
+            | command::Type::RenameRole(_)
+            | command::Type::LeaveRoom(_)
+            | command::Type::Kick(_)
+            | command::Type::Ban(_) => StateImpact::Room,
+            command::Type::AddToQueue(_)
+            | command::Type::SetVolume(_)
+            | command::Type::PlayResume(_)
+            | command::Type::Pause(_)
+            | command::Type::SkipNext(_)
+            | command::Type::SkipPrevious(_)
+            | command::Type::SeekToPos(_) => StateImpact::Both(match &self.cmd_type {
+                command::Type::AddToQueue(_) => SPOTIFY_FETCH_TRACKS_Q,
+                command::Type::SetVolume(_)
+                | command::Type::PlayResume(_)
+                | command::Type::Pause(_)
+                | command::Type::SeekToPos(_) => SPOTIFY_FETCH_PLAYBACK,
+                command::Type::SkipNext(_) | command::Type::SkipPrevious(_) => {
+                    SPOTIFY_FETCH_TRACKS_Q | SPOTIFY_FETCH_PLAYBACK
+                }
+                _ => unreachable!(),
+            }),
+        }
+    }
+
+    async fn has_permission_to(&self) -> bool {
         let guard = self.sharify_state.read().await;
         let Some(room) = guard.get_room(&self.room_id) else {
             return false;
@@ -156,7 +162,7 @@ impl Command {
 
         let perms = role.permissions;
 
-        if let command::Type::RenameRole(opts) = cmd_type {
+        if let command::Type::RenameRole(opts) = &self.cmd_type {
             let Ok(role_id) = Uuid::from_slice(&opts.role_id[..16]) else {
                 return false;
             };
@@ -171,7 +177,7 @@ impl Command {
 
         drop(guard);
 
-        match *cmd_type {
+        match self.cmd_type {
             command::Type::GetRoom(_) | command::Type::LeaveRoom(_) => true,
             command::Type::Search(_) | command::Type::AddToQueue(_) => perms.can_add_song,
             command::Type::SetVolume(_)
@@ -227,11 +233,24 @@ impl Commands for Command {
         Ok(Some(Self::T::SpotifySearchResult(tracks.into())))
     }
 
-    async fn add_to_queue(self, track: command::AddTrackToQueue) -> Self::Output {
-        let spotify = self.get_spotify_handler().await?;
+    async fn add_to_queue(self, opts: command::AddTrackToQueue) -> Self::Output {
+        let mut guard = self.sharify_state.write().await;
 
-        spotify
-            .add_track_to_queue(track.track_id)
+        let room = guard
+            .get_room_mut(&self.room_id)
+            .ok_or(command_response::Type::RoomError(
+                RoomError::RoomNotFound.into(),
+            ))?;
+
+        room.tracks_queue.push_back(RoomTrack {
+            user_id: self.user_id,
+            track_id: opts.track_id.clone(),
+            track_name: opts.track_name,
+            track_duration: opts.track_duration,
+        });
+
+        room.spotify_handler
+            .add_track_to_queue(opts.track_id)
             .await
             .map_err(Into::<Self::T>::into)?;
 

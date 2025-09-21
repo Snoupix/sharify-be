@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -279,9 +278,14 @@ impl SharifyWsInstance {
             .await
             .is_user_an_owner_and_alone(room_id, user_id);
 
-        let ws_cmd = WSCmd::new(Arc::clone(&state_mgr), user_id.clone(), room_id);
+        let ws_cmd = WSCmd::new(
+            Arc::clone(&state_mgr),
+            user_id.clone(),
+            room_id,
+            cmd_type.clone(),
+        );
 
-        let processed_cmd = ws_cmd.process(cmd_type.clone()).await;
+        let processed_cmd = ws_cmd.process().await;
 
         // Handle state impact first
         if let (Ok(_), state_impact) = &processed_cmd {
@@ -295,25 +299,29 @@ impl SharifyWsInstance {
 
                         // This is a bit ugly but wesocket is so fast that
                         // Spotify current playback data is not synced yet
+                        //
+                        // The room data needs to happen after since the command
+                        // could have been Skip(Next|Previous) and the TracksQueue
+                        // has to be sync
                         actix_rt::spawn(async move {
                             actix_rt::time::sleep(Duration::from_millis(500)).await;
 
                             let _ = Self::send_spotify_state_in_room(
-                                ws_mgr,
-                                state_mgr,
+                                Arc::clone(&ws_mgr),
+                                Arc::clone(&state_mgr),
                                 room_id,
                                 spotify_fetching,
                             )
                             .await;
+
+                            Self::send_room_data_in_room(
+                                Arc::clone(&ws_mgr),
+                                Arc::clone(&state_mgr),
+                                room_id,
+                            )
+                            .await;
                         });
                     }
-
-                    Self::send_room_data_in_room(
-                        Arc::clone(&ws_mgr),
-                        Arc::clone(&state_mgr),
-                        room_id,
-                    )
-                    .await;
                 }
             }
         }
@@ -525,14 +533,10 @@ impl SharifyWsInstance {
                 return;
             }
 
-            // TODO:
-            //   - Invalidate/Mutate the tick outside (when Seek, Play/Pause, Skip...)
-            //   (Do not invalidate the tick, set it to the default data fetch so it might be
-            //   played again from another source after a Pause from Sharify)
-            //   - What should update (and how) the sleeper
-            let mut sleep_fut = pin!(time::sleep_until(
-                time::Instant::now() + spotify::DEFAULT_DATA_INTERVAL
-            ));
+            let sleep_fut =
+                time::sleep_until(time::Instant::now() + spotify::DEFAULT_DATA_INTERVAL);
+
+            tokio::pin!(sleep_fut);
 
             loop {
                 tokio::select! {
@@ -544,6 +548,7 @@ impl SharifyWsInstance {
                     myb_tick = tick_rx.recv() => {
                         match myb_tick {
                             Some(tick) => {
+                                debug!("Spotify sleeper reset to {}s", tick.as_secs());
                                 sleep_fut.as_mut().reset(time::Instant::now() + tick);
                                 continue;
                             }
